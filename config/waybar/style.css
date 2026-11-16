@@ -1,0 +1,100 @@
+@import "accent.css";
+
+/* macOS-style menu bar: slim frosted strip, small white icons, plain text clock */
+* {
+  font-family: "Inter", "JetBrainsMono Nerd Font", "Cantarell", sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  border: none;
+  border-radius: 0;
+  min-height: 0;
+  box-shadow: none;
+  text-shadow: none;
+}
+
+window#waybar {
+  background-color: rgba(24,28,40,0.30);
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  color: #ffffff;
+}
+
+/* status icons */
+#network, #pulseaudio, #bluetooth, #battery, #temperature {
+  font-family: "JetBrainsMono Nerd Font", "Symbols Nerd Font", sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  color: #ffffff;
+  background: transparent;
+  padding: 0 7px;
+  margin: 2px 0;
+  border-radius: 5px;
+  text-shadow: 0 0 6px rgba(0,0,0,0.25);
+  transition: background-color 120ms ease;
+}
+
+/* clock: plain text, like the menu bar */
+#clock {
+  color: #ffffff;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 0 9px;
+  margin: 2px 0;
+  border-radius: 5px;
+  text-shadow: 0 0 6px rgba(0,0,0,0.25);
+  transition: background-color 120ms ease;
+}
+
+#network:hover, #pulseaudio:hover, #bluetooth:hover, #battery:hover, #temperature:hover, #clock:hover {
+  background-color: rgba(255,255,255,0.16);
+}
+
+/* workspaces: menu-item text, active one gets the soft highlight */
+#workspaces { background: transparent; margin: 0 0 0 6px; padding: 0; }
+#workspaces button {
+  background: transparent;
+  color: rgba(255,255,255,0.72);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 0 9px;
+  margin: 2px 1px;
+  border-radius: 5px;
+  text-shadow: 0 0 6px rgba(0,0,0,0.25);
+  transition: background-color 120ms ease;
+}
+#workspaces button:hover { background-color: rgba(255,255,255,0.14); color: #ffffff; }
+#workspaces button.active, #workspaces button.focused {
+  background-color: rgba(255,255,255,0.22);
+  color: #ffffff;
+  font-weight: 600;
+}
+#workspaces button.urgent { background-color: #ff5f57; color: #ffffff; }
+
+/* center pill */
+#custom-dynamic_pill {
+  background-color: rgba(0,0,0,0.34);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 10px;
+  color: #ffffff;
+  padding: 0 12px;
+  margin: 3px 6px 3px 0;
+}
+
+/* right edge */
+.modules-right > widget:last-child > * { margin-right: 6px; }
+
+/* states */
+#battery.charging, #battery.plugged { color: #5be37d; }
+#battery.warning:not(.charging) { color: #ffcc00; }
+#battery.critical:not(.charging) { color: #ff5f57; }
+#network.disconnected { color: rgba(255,255,255,0.55); }
+#pulseaudio.muted { color: rgba(255,255,255,0.55); }
+#temperature.critical { color: #ff5f57; }
+
+/* tooltips */
+tooltip {
+  background-color: rgba(20,22,32,0.88);
+  border: 1px solid rgba(255,255,255,0.22);
+  border-radius: 12px;
+}
+tooltip label { color: #ffffff; padding: 2px 4px; }

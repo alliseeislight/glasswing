@@ -1,0 +1,15 @@
+* {
+    bg-col: #FFFEF3E6;
+    fg-col: #181B10;
+    border-col: #181B101A;
+    sel-bg: #55638180;
+    --col0: #FFFEF3;
+    --col1: #DAB27E;
+    --col2: #9DB1BF;
+    --col3: #B48A8B;
+    --col4: #556381;
+    --col5: #653738;
+    --col8: #AB8E6A;
+
+    sel-grad: linear-gradient(45deg, #9DB1BF, #B48A8B);
+}

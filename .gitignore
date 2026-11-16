@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# Installer / editor backups
+*.bak
+*.bak.*
+*.pre-*
+*.backup
+*.behaviour-backup
+*.minimal-backup
+*~
+.DS_Store
+Thumbs.db
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+
+# Build output
+build/
+dist/

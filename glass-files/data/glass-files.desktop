@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Glass Files
+GenericName=File Manager
+Comment=Browse, preview, and manage your files
+Exec=@HOME@/.local/bin/glass-files %U
+TryExec=@HOME@/.local/bin/glass-files
+Icon=local.glass.files
+Terminal=false
+Categories=System;FileManager;Utility;Core;GTK;
+Keywords=files;folders;browse;manager;explorer;
+StartupNotify=true
+StartupWMClass=local.glass.files
+MimeType=inode/directory;
+DBusActivatable=true
+X-GIO-NoFuse=true

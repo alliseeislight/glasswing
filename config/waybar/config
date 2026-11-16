@@ -1,0 +1,121 @@
+{
+    "layer": "top",
+    "position": "top",
+    "height": 26,
+    "spacing": 0,
+    "modules-left": [
+        "hyprland/workspaces"
+    ],
+    "modules-center": [
+        "clock"
+    ],
+    "modules-right": [
+        "custom/dynamic_pill",
+        "network",
+        "pulseaudio",
+        "bluetooth",
+        "battery",
+        "temperature"
+    ],
+    "hyprland/workspaces": {
+        "format": "{icon}",
+        "format-active": "{icon}",
+        "on-click": "activate"
+    },
+    "custom/dynamic_pill": {
+        "return-type": "json",
+        "format": "{}",
+        "exec": "bash @HOME@/.config/hypr/scripts/tools/start_dyn",
+        "escape": true,
+        "on-click": "swaync-client -t -sw",
+        "on-click-middle": "/usr/bin/python3 @HOME@/.config/hypr/scripts/tools/dynamic --toggle",
+        "on-click-right": "@HOME@/.config/hypr/scripts/popouts/popup.sh volume",
+        "on-scroll-up": "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+",
+        "on-scroll-down": "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-",
+        "smooth-scrolling-threshold": 1
+    },
+    "clock": {
+        "on-click": "@HOME@/.config/hypr/scripts/popouts/popup.sh calendar",
+        "format": "{:%I:%M %p}",
+        "interval": 60,
+        "max-length": 25,
+        "tooltip": false
+    },
+    "temperature": {
+        "critical-threshold": 95,
+        "format-critical": "\udb83\ude01",
+        "format": "\udb81\udd0f",
+        "tooltip-format": "{temperatureC}\u00b0C"
+    },
+    "battery": {
+        "on-click": "@HOME@/.config/hypr/scripts/popouts/popup.sh battery",
+        "states": {
+            "warning": 30,
+            "critical": 15
+        },
+        "format": "{icon}",
+        "format-charging": "\udb80\udc84",
+        "format-plugged": "\udb81\udea5",
+        "tooltip-format": "{capacity}%  {timeTo}",
+        "format-icons": [
+            "\udb80\udc7a",
+            "\udb80\udc7b",
+            "\udb80\udc7c",
+            "\udb80\udc7d",
+            "\udb80\udc7e",
+            "\udb80\udc7f",
+            "\udb80\udc80",
+            "\udb80\udc81",
+            "\udb80\udc82",
+            "\udb80\udc79"
+        ]
+    },
+    "network": {
+        "format-wifi": "{icon}",
+        "format-ethernet": "\udb80\ude00",
+        "format-linked": "\udb80\ude00",
+        "format-disconnected": "\udb81\uddaa",
+        "tooltip-format": "{essid} ({signalStrength}%)",
+        "format-icons": [
+            "\udb82\udd2f",
+            "\udb82\udd1f",
+            "\udb82\udd22",
+            "\udb82\udd25",
+            "\udb82\udd28"
+        ],
+        "on-click": "@HOME@/.config/hypr/scripts/popouts/popup.sh wifi",
+        "tooltip-format-wifi": "{essid} ({signalStrength}%)",
+        "tooltip-format-ethernet": "{ifname}",
+        "tooltip-format-disconnected": "Disconnected"
+    },
+    "bluetooth": {
+        "format": "\udb80\udcaf",
+        "format-connected": "\udb80\udcb1",
+        "tooltip-format": "{controller_alias}\t{controller_address}\n\n{num_connections} connected",
+        "tooltip-format-connected": "{controller_alias}\t{controller_address}\n\n{num_connections} connected\n\n{device_enumerate}",
+        "tooltip-format-enumerate-connected": "{device_alias}\t{device_address}",
+        "tooltip-format-enumerate-connected-battery": "{device_alias}\t{device_address}\t{device_battery_percentage}%",
+        "on-click": "@HOME@/.config/hypr/scripts/popouts/popup.sh bluetooth",
+        "format-on": "\udb80\udcaf",
+        "format-off": "\udb80\udcb2",
+        "format-disabled": "\udb80\udcb2",
+        "format-connected-battery": "\udb80\udcb1"
+    },
+    "pulseaudio": {
+        "on-click-right": "@HOME@/.config/hypr/scripts/popouts/popup.sh volume",
+        "on-click": "@HOME@/.config/hypr/scripts/popouts/popup.sh volume",
+        "scroll-step": 5,
+        "format": "{icon}",
+        "format-bluetooth": "{icon}",
+        "format-bluetooth-muted": "\udb81\udf5f",
+        "format-muted": "\udb81\udf5f",
+        "format-icons": {
+            "default": [
+                "\udb81\udd7f",
+                "\udb81\udd80",
+                "\udb81\udd7e"
+            ]
+        },
+        "tooltip-format": "{desc}  {volume}%"
+    }
+}

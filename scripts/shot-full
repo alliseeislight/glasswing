@@ -1,0 +1,4 @@
+#!/bin/sh
+d="$HOME/Pictures/Screenshots"; mkdir -p "$d"
+f="$d/$(date +%F_%H-%M-%S).png"
+grim "$f" && wl-copy < "$f" && notify-send -i "$f" "Screenshot saved" "$f"

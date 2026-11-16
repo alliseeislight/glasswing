@@ -1,0 +1,11 @@
+#!/bin/sh
+# Fast path for Super+E: reuse the resident Glass Files service.
+# If the service/D-Bus call fails, fall back to the normal launcher.
+if command -v gdbus >/dev/null 2>&1; then
+    gdbus call --session \
+        --dest org.freedesktop.FileManager1 \
+        --object-path /org/freedesktop/FileManager1 \
+        --method org.freedesktop.FileManager1.ShowFolders \
+        "['file://${HOME}']" "" >/dev/null 2>&1 && exit 0
+fi
+exec "${HOME}/.local/bin/glass-files"

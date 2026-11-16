@@ -1,0 +1,92 @@
+@import "accent.rasi"
+
+* {
+    bg: #1416206b;
+    fg: #ffffff;
+    dim: #ffffff99;
+    hair: #ffffff47;
+    chip: #ffffff1a;
+    font: "Inter 13";
+}
+
+configuration {
+    modi: "drun";
+    show-icons: true;
+    drun-display-format: "{name}";
+    display-drun: "󰍉";
+}
+
+window {
+    location: center;
+    anchor: center;
+    width: 640px;
+    background-color: @bg;
+    border: 1px;
+    border-color: @hair;
+    border-radius: 28px;
+}
+
+mainbox {
+    background-color: transparent;
+    padding: 18px;
+    spacing: 12px;
+    children: [ inputbar, listview ];
+}
+
+inputbar {
+    background-color: @chip;
+    border: 1px;
+    border-color: @hair;
+    border-radius: 18px;
+    padding: 12px 16px;
+    spacing: 12px;
+    children: [ prompt, entry ];
+}
+
+prompt {
+    background-color: transparent;
+    text-color: @accent;
+}
+
+entry {
+    background-color: transparent;
+    text-color: @fg;
+    placeholder: "Search apps";
+    placeholder-color: @dim;
+    cursor-color: @accent;
+}
+
+listview {
+    background-color: transparent;
+    lines: 7;
+    columns: 1;
+    spacing: 4px;
+    scrollbar: false;
+    fixed-height: true;
+}
+
+element {
+    background-color: transparent;
+    text-color: @fg;
+    padding: 10px 14px;
+    border-radius: 16px;
+    spacing: 14px;
+}
+
+element selected.normal {
+    background-color: @accent-soft;
+    border: 1px;
+    border-color: @accent-mid;
+    text-color: @fg;
+}
+
+element-icon {
+    size: 28px;
+    background-color: transparent;
+}
+
+element-text {
+    background-color: transparent;
+    text-color: inherit;
+    vertical-align: 0.5;
+}

@@ -1,0 +1,5 @@
+* {
+    accent: #ddb888;
+    accent-soft: #ddb88847;
+    accent-mid: #ddb8888c;
+}

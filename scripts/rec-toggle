@@ -1,0 +1,5 @@
+#!/bin/sh
+if pgrep -x wl-screenrec >/dev/null; then pkill -INT -x wl-screenrec; notify-send "Recording stopped"; exit 0; fi
+d="$HOME/Videos/Recordings"; mkdir -p "$d"
+notify-send "Recording started"
+exec wl-screenrec -f "$d/$(date +%F_%H-%M-%S).mp4"

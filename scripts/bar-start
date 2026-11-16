@@ -1,0 +1,12 @@
+#!/usr/bin/python3
+# start waybar at login unless the Top bar switch in Settings is off
+import json
+import os
+
+try:
+    with open(os.path.expanduser("~/.config/glass/shell.json")) as f:
+        on = json.load(f).get("bar", {}).get("enabled", True)
+except Exception:
+    on = True
+if on:
+    os.execvp("waybar", ["waybar"])
