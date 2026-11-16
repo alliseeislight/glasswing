@@ -19,7 +19,11 @@ import urllib.parse
 HOME = os.path.expanduser("~")
 APP_ID = "local.glass.files"
 APP_NAME = "Glass Files"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
+
+# Raster formats Pillow can rotate and write back reliably. Animated and
+# multi-frame containers are deliberately excluded.
+ROTATE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
 # Extensions that look like text even when the mimetype db is unhelpful.
 TEXT_EXT = {

@@ -18,7 +18,7 @@ from . import (accent as accent_mod, css, filemanager1, prefs as prefs_mod,
 
 APP_ID = "local.glass.files"
 APP_NAME = "Glass Files"
-VERSION = "0.1.0"
+VERSION = "1.1.0"
 
 
 class GlassApplication(Gtk.Application):

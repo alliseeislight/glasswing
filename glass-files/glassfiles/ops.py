@@ -16,6 +16,7 @@ import random
 import shutil
 import stat
 import subprocess
+import tempfile
 import time
 import zipfile
 
@@ -478,6 +479,79 @@ def symlink(target: str, link_path: str) -> str:
 
 def chmod(path: str, mode: int) -> None:
     os.chmod(path, mode)
+
+
+def rotate_image(path: str, degrees: int, progress=None, cancel=None) -> str:
+    """Rotate a raster image clockwise by 90/180/270 degrees, atomically.
+
+    EXIF orientation is normalised first so a photo taken sideways keeps its
+    intended orientation. The write goes to a sibling temp file and is then
+    renamed over the original; a failed save never damages the source.
+    """
+    if degrees not in (90, 180, 270, -90, -180, -270):
+        raise OpError("Rotation must be a multiple of 90 degrees.")
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in util.ROTATE_EXT:
+        raise OpError(f"Rotation is not supported for {ext or 'this file type'}.")
+    if not os.path.isfile(path) or os.path.islink(path):
+        raise OpError("Only regular image files can be rotated.")
+    if cancel is not None and cancel.is_set():
+        raise Cancelled()
+    try:
+        from PIL import Image, ImageOps
+    except Exception as e:
+        raise OpError("Pillow is required for image rotation.") from e
+
+    parent = os.path.dirname(path) or "."
+    st = os.stat(path)
+    tmp = None
+    try:
+        with Image.open(path) as src:
+            if getattr(src, "n_frames", 1) > 1:
+                raise OpError("Animated and multi-frame images cannot be rotated.")
+            fmt = src.format or "PNG"
+            if fmt == "MPO":
+                fmt = "JPEG"
+            im = ImageOps.exif_transpose(src)
+            rotated = im.rotate(-degrees, expand=True)
+            exif = rotated.info.get("exif")
+            icc = rotated.info.get("icc_profile")
+            kwargs = {}
+            if fmt == "JPEG":
+                kwargs.update(quality=95, optimize=True, subsampling=0, progressive=True)
+            elif fmt == "PNG":
+                kwargs.update(optimize=True)
+            elif fmt == "WEBP":
+                kwargs.update(quality=95, method=6)
+            elif fmt == "TIFF":
+                kwargs.update(compression="tiff_lzw")
+            if exif:
+                kwargs["exif"] = exif
+            if icc:
+                kwargs["icc_profile"] = icc
+            fd, tmp = tempfile.mkstemp(prefix=".glass-rotate-", suffix=ext, dir=parent)
+            os.close(fd)
+            rotated.save(tmp, format=fmt, **kwargs)
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
+        os.chmod(tmp, stat.S_IMODE(st.st_mode))
+        os.replace(tmp, path)
+        tmp = None
+        if progress:
+            progress(1.0, path)
+        return path
+    except (OpError, Cancelled):
+        raise
+    except OSError as e:
+        raise OpError(f"Could not rotate {os.path.basename(path)}: {e.strerror}") from e
+    except Exception as e:
+        raise OpError(f"Could not rotate {os.path.basename(path)}: {e}") from e
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 def copy_path_text(path: str) -> str:

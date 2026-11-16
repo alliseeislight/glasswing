@@ -27,6 +27,8 @@ class QuickLook(Gtk.Window):
         self._path = None
         self._serial = 0
         self._media = None
+        self._slideshow_id = 0
+        self._slideshow_on = False
 
         handle = Gtk.WindowHandle()
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -42,6 +44,18 @@ class QuickLook(Gtk.Window):
         self._title = ui.label("", "ql-title", ellipsize=2)
         self._title.set_hexpand(True)
         head.append(self._title)
+        self.rotate_left = ui.button(icon="object-rotate-left-symbolic",
+                                     tooltip="Rotate left (Shift+R)", css="win-btn", size=14)
+        self.rotate_left.connect("clicked", lambda *_: self._rotate(-90))
+        head.append(self.rotate_left)
+        self.rotate_right = ui.button(icon="object-rotate-right-symbolic",
+                                      tooltip="Rotate right (R)", css="win-btn", size=14)
+        self.rotate_right.connect("clicked", lambda *_: self._rotate(90))
+        head.append(self.rotate_right)
+        self.slide_btn = ui.button(icon="media-playback-start-symbolic",
+                                   tooltip="Start slideshow (P)", css="win-btn", size=14)
+        self.slide_btn.connect("clicked", lambda *_: self.toggle_slideshow())
+        head.append(self.slide_btn)
         close = ui.button(icon="window-close-symbolic", tooltip="Close (Space)", css="win-btn", size=13)
         close.connect("clicked", lambda *_: self.hide())
         head.append(close)
@@ -104,7 +118,7 @@ class QuickLook(Gtk.Window):
         self.meta = ui.label("", "ql-meta", ellipsize=2)
         self.meta.set_hexpand(True)
         foot.append(self.meta)
-        self.hint = ui.label("Space / Esc to close   \u2190 \u2192 next file", "ql-meta")
+        self.hint = ui.label("Space/Esc close   \u2190 \u2192 next   R rotate   P slideshow", "ql-meta")
         foot.append(self.hint)
         root.append(foot)
 
@@ -122,7 +136,46 @@ class QuickLook(Gtk.Window):
         if keyval in (Gdk.KEY_Left, Gdk.KEY_Right):
             self.parent_window.quicklook_step(-1 if keyval == Gdk.KEY_Left else 1)
             return True
+        if keyval == Gdk.KEY_r:
+            self._rotate(-90 if state & Gdk.ModifierType.SHIFT_MASK else 90)
+            return True
+        if keyval == Gdk.KEY_p:
+            self.toggle_slideshow()
+            return True
         return False
+
+    def current_path(self):
+        return self._path
+
+    def _rotate(self, degrees):
+        if self._path and thumbs.can_rotate(self._path):
+            self.parent_window.rotate_paths([self._path], degrees)
+
+    def toggle_slideshow(self):
+        if self._slideshow_on:
+            self._stop_slideshow()
+            return
+        self._slideshow_on = True
+        if self.slide_btn.get_child() is not None:
+            self.slide_btn.get_child().set_from_icon_name("media-playback-pause-symbolic")
+        self.slide_btn.set_tooltip_text("Pause slideshow (P)")
+        self._slideshow_id = GLib.timeout_add_seconds(4, self._slideshow_tick)
+
+    def _stop_slideshow(self):
+        if self._slideshow_id:
+            GLib.source_remove(self._slideshow_id)
+            self._slideshow_id = 0
+        self._slideshow_on = False
+        if self.slide_btn.get_child() is not None:
+            self.slide_btn.get_child().set_from_icon_name("media-playback-start-symbolic")
+        self.slide_btn.set_tooltip_text("Start slideshow (P)")
+
+    def _slideshow_tick(self):
+        if not self._slideshow_on or not self.get_visible():
+            self._stop_slideshow()
+            return False
+        self.parent_window.quicklook_step(1, loop=True)
+        return True
 
     def present_path(self, path: str):
         if not path:
@@ -146,6 +199,9 @@ class QuickLook(Gtk.Window):
         is_dir = os.path.isdir(path)
         mime = "inode/directory" if is_dir else util.mime_type(path)
         ext = os.path.splitext(path)[1].lower()
+        can_rotate = not is_dir and thumbs.can_rotate(path)
+        self.rotate_left.set_visible(can_rotate)
+        self.rotate_right.set_visible(can_rotate)
 
         if is_dir:
             self.stack.set_visible_child_name("other")
@@ -175,11 +231,10 @@ class QuickLook(Gtk.Window):
             cache = thumbs.existing(path, "x-large") or thumbs.existing(path, "large")
             if cache:
                 self.picture.set_paintable(thumbs.texture_from_file(cache))
-                if serial == self._serial:
-                    return
-            self.parent_window.thumbpool.request(
-                path, "x-large",
-                lambda p, c: self._set_picture(c, serial))
+            else:
+                self.parent_window.thumbpool.request(
+                    path, "x-large",
+                    lambda p, c: self._set_picture(c, serial))
         elif mime.startswith("video/"):
             self.stack.set_visible_child_name("video")
             try:
@@ -302,5 +357,6 @@ class QuickLook(Gtk.Window):
         self._media = None
 
     def hide(self):
+        self._stop_slideshow()
         self.close_media()
         super().hide()

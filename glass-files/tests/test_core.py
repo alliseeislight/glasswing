@@ -8,7 +8,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from glassfiles import accent, ops, trash, undo, util
+from glassfiles import accent, ops, thumbs, trash, undo, util
 
 
 class TempCase(unittest.TestCase):
@@ -76,6 +76,33 @@ class TestUtil(unittest.TestCase):
         self.assertEqual(len(rgb), 3)
         self.assertTrue(all(0 <= v <= 255 for v in rgb))
         self.assertIn("glass_accent", accent.defines(rgb))
+
+
+class TestThumbs(TempCase):
+    def setUp(self):
+        super().setUp()
+        self._old_cache = thumbs.CACHE_HOME
+        thumbs.CACHE_HOME = os.path.join(self.root, "thumbs")
+
+    def tearDown(self):
+        thumbs.CACHE_HOME = self._old_cache
+        super().tearDown()
+
+    def test_cache_is_invalidated_when_source_changes(self):
+        try:
+            from PIL import Image
+        except Exception:
+            self.skipTest("Pillow not available")
+        path = os.path.join(self.root, "thumb.png")
+        Image.new("RGB", (40, 20), (1, 2, 3)).save(path)
+        cache = thumbs.generate(path, "large")
+        self.assertTrue(cache and os.path.isfile(cache))
+        self.assertEqual(thumbs.existing(path, "large"), cache)
+        future = time.time() + 20
+        os.utime(path, (future, future))
+        self.assertIsNone(thumbs.existing(path, "large"))
+        thumbs.forget(path)
+        self.assertFalse(os.path.exists(cache))
 
 
 class TestTrash(TempCase):
@@ -234,6 +261,34 @@ class TestOps(TempCase):
         self.assertTrue(ops._unsafe_member("../escape.txt"))
         self.assertTrue(ops._unsafe_member("/abs.txt"))
 
+    def test_rotate_image_pixels_and_atomicity(self):
+        try:
+            from PIL import Image
+        except Exception:
+            self.skipTest("Pillow not available")
+        path = os.path.join(self.root, "pixel.png")
+        im = Image.new("RGB", (2, 3))
+        im.putpixel((0, 0), (255, 0, 0))
+        im.putpixel((1, 0), (0, 255, 0))
+        im.putpixel((0, 1), (0, 0, 255))
+        im.putpixel((1, 1), (255, 255, 0))
+        im.putpixel((0, 2), (255, 0, 255))
+        im.putpixel((1, 2), (0, 255, 255))
+        im.save(path)
+        ops.rotate_image(path, 90)
+        with Image.open(path) as out:
+            self.assertEqual(out.size, (3, 2))
+            # The old bottom-left (magenta) ends up top-left after clockwise rotation.
+            self.assertEqual(out.getpixel((0, 0)), (255, 0, 255))
+            self.assertEqual(out.getpixel((2, 0)), (255, 0, 0))
+        self.assertFalse(any(name.startswith(".glass-rotate-")
+                             for name in os.listdir(self.root)))
+
+    def test_rotate_image_rejects_unsupported(self):
+        path = self.make("x.gif", b"GIF89a")
+        with self.assertRaises(ops.OpError):
+            ops.rotate_image(path, 90)
+
     def test_checksum(self):
         p = self.make("src/a.txt", b"abc")
         self.assertEqual(ops.checksum(p, "sha256"),
@@ -252,6 +307,21 @@ class TestOps(TempCase):
 
 
 class TestUndo(TempCase):
+    def test_rotate_undo_redo(self):
+        try:
+            from PIL import Image
+        except Exception:
+            self.skipTest("Pillow not available")
+        path = os.path.join(self.root, "rot.png")
+        Image.new("RGB", (4, 2), (10, 20, 30)).save(path)
+        action = undo.RotateAction([path], 90)
+        self.assertTrue(all(action.undo()))
+        with Image.open(path) as im:
+            self.assertEqual(im.size, (2, 4))
+        self.assertTrue(all(action.redo()))
+        with Image.open(path) as im:
+            self.assertEqual(im.size, (4, 2))
+
     def test_rename_undo_redo(self):
         p = self.make("src/a.txt")
         new = ops.rename(p, "b.txt")

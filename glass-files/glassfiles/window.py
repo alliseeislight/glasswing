@@ -724,7 +724,12 @@ class GlassWindow(Gtk.ApplicationWindow):
         simple("properties", lambda: self.show_properties())
         simple("copy-path", self.copy_path)
         simple("select-all", self.select_all)
+        simple("select-images", lambda: self.select_kind("image"))
+        simple("select-folders", lambda: self.select_kind("folder"))
+        simple("select-files", lambda: self.select_kind("file"))
         simple("invert-selection", self.invert_selection)
+        simple("rotate-left", lambda: self.rotate_selected(-90))
+        simple("rotate-right", lambda: self.rotate_selected(90))
         simple("star-toggle", self.star_toggle)
         simple("view-grid", lambda: self.set_view("grid"))
         simple("view-list", lambda: self.set_view("list"))
@@ -762,9 +767,18 @@ class GlassWindow(Gtk.ApplicationWindow):
         keys.connect("key-pressed", self._on_key)
         self.add_controller(keys)
 
+    def _focus_in_text(self):
+        # GTK4 entries expose an internal Gtk.Text as the focus widget, so a
+        # direct isinstance check on get_focus() misses them.
+        widget = self.get_focus()
+        while widget is not None:
+            if isinstance(widget, (Gtk.Entry, Gtk.TextView, Gtk.SearchEntry)):
+                return True
+            widget = widget.get_parent()
+        return False
+
     def _on_key(self, c, keyval, keycode, state):
-        focus = self.get_focus()
-        in_text = isinstance(focus, (Gtk.Entry, Gtk.TextView, Gtk.SearchEntry))
+        in_text = self._focus_in_text()
         ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
         shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
         alt = bool(state & Gdk.ModifierType.ALT_MASK)
@@ -1193,6 +1207,27 @@ class GlassWindow(Gtk.ApplicationWindow):
         if p and p.model:
             p.model.selection.select_all()
 
+    def select_kind(self, kind: str):
+        """Select every image, folder, or non-folder in the active view."""
+        p = self.active_pane()
+        if not p or not p.model:
+            return
+        p.model.selection.unselect_all()
+        for i in range(p.model.count()):
+            info = p.model.item(i)
+            if info is None:
+                continue
+            is_dir = model.is_dir(info)
+            if kind == "folder":
+                match = is_dir
+            elif kind == "file":
+                match = not is_dir
+            else:
+                match = model.mime_of(info).startswith("image/")
+            if match:
+                p.model.selection.select_item(i, False)
+        self.sync_status()
+
     def invert_selection(self):
         p = self.active_pane()
         if not p or not p.model:
@@ -1203,6 +1238,7 @@ class GlassWindow(Gtk.ApplicationWindow):
                 p.model.selection.unselect_item(i)
             else:
                 p.model.selection.select_item(i, False)
+        self.sync_status()
 
     def copy_path(self):
         p = self.active_pane()
@@ -1308,6 +1344,57 @@ class GlassWindow(Gtk.ApplicationWindow):
 
     def rename_dialog(self, path):
         dialogs.rename_dialog(self, path)
+
+    def rotate_selected(self, degrees: int):
+        p = self.active_pane()
+        if p is None:
+            return
+        self.rotate_paths(p.selected_paths(), degrees)
+
+    def rotate_paths(self, paths, degrees: int):
+        """Rotate image files clockwise. Failures are reported per batch."""
+        paths = [p for p in paths if thumbs.can_rotate(p)]
+        if not paths:
+            self.toast("Select a JPEG, PNG, WebP, BMP, or TIFF image")
+            return
+
+        def worker(job):
+            result = {"rotated": [], "failed": []}
+            total = len(paths)
+            for i, path in enumerate(paths):
+                if job.cancelled:
+                    break
+                job.set_progress(i / total, util.display_name(path))
+                try:
+                    ops.rotate_image(path, degrees, cancel=job.cancel_event)
+                    result["rotated"].append(path)
+                except ops.Cancelled:
+                    break
+                except Exception as e:
+                    result["failed"].append((path, str(e)))
+            return result
+
+        def done(job, error):
+            result = job.result or {}
+            rotated = result.get("rotated", [])
+            failed = result.get("failed", [])
+            if rotated:
+                self.undo_stack.push(undo_mod.RotateAction(rotated, degrees))
+                for path in rotated:
+                    thumbs.forget(path)
+                self.thumbpool.cancel_all()
+                self.refresh_all()
+                if self._quick is not None and self._quick.get_visible():
+                    qpath = self._quick.current_path()
+                    if qpath:
+                        self._quick.present_path(qpath)
+                self.toast(f"Rotated {len(rotated)} image{'s' if len(rotated) != 1 else ''}")
+            if failed:
+                self.toast(f"Could not rotate {os.path.basename(failed[0][0])}: {failed[0][1]}")
+            elif error:
+                self.toast(str(error))
+
+        self.jobs.submit("Rotating images", worker, done)
 
     def duplicate_selected(self):
         paths = self.active_pane().selected_paths() if self.active_pane() else []
@@ -1738,15 +1825,16 @@ class GlassWindow(Gtk.ApplicationWindow):
             self._quick = quicklook.QuickLook(self)
         self._quick.present_path(path)
 
-    def quicklook_step(self, delta):
+    def quicklook_step(self, delta, loop=False):
         p = self.active_pane()
-        if p is None or p.model is None:
+        if p is None or p.model is None or p.model.count() == 0:
             return
         bits = p.model.selection.get_selection()
         if not bits.get_size():
             return
         pos = bits.get_nth(0)
-        new = max(0, min(p.model.count() - 1, pos + delta))
+        count = p.model.count()
+        new = (pos + delta) % count if loop else max(0, min(count - 1, pos + delta))
         p.model.selection.select_item(new, True)
         view = p.grid if p.view_mode == "grid" else p.list
         view.scroll_to(new, Gtk.ListScrollFlags.FOCUS, None)

@@ -30,10 +30,38 @@ def size_dir(size: str = "large") -> str:
     return os.path.join(CACHE_HOME, size if size in SIZES else "large")
 
 
+def _fresh(path: str, cache: str) -> bool:
+    """A cached thumbnail is only valid while the source is not newer."""
+    try:
+        return os.stat(cache).st_mtime >= os.stat(path).st_mtime
+    except OSError:
+        return False
+
+
 def existing(path: str, size: str = "large") -> str | None:
     uri = util.path_to_uri(path)
     cand = os.path.join(size_dir(size), _key(uri) + ".png")
-    return cand if os.path.isfile(cand) else None
+    return cand if os.path.isfile(cand) and _fresh(path, cand) else None
+
+
+def forget(path: str) -> int:
+    """Drop every cached size for a file, e.g. after rotating it."""
+    uri = util.path_to_uri(path)
+    key = _key(uri)
+    removed = 0
+    for size in SIZES:
+        cand = os.path.join(size_dir(size), key + ".png")
+        try:
+            os.unlink(cand)
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+def can_rotate(path: str) -> bool:
+    return (bool(path) and os.path.splitext(path)[1].lower() in util.ROTATE_EXT
+            and os.path.isfile(path) and not os.path.islink(path))
 
 
 def is_thumbnailable(path: str, mime: str = "") -> bool:
@@ -87,7 +115,7 @@ def generate(path: str, size: str = "large") -> str | None:
     ext = os.path.splitext(path)[1].lower()
     uri = util.path_to_uri(path)
     dest = os.path.join(size_dir(size), _key(uri) + ".png")
-    if os.path.isfile(dest):
+    if os.path.isfile(dest) and _fresh(path, dest):
         return dest
     try:
         st = os.stat(path)

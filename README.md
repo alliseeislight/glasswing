@@ -24,7 +24,7 @@ outline, and just enough colour to catch the light.
 | **Dock** | An auto-hiding glass dock pinned to installed apps, with running indicators and a glass hover card. |
 | **Desktop widgets** | Weather, calendar, now-playing, system stats, and a photo card, all layered directly on the wallpaper. |
 | **Popouts** | GTK4 layer-shell panels for Wi-Fi, Bluetooth, volume, battery, calendar, clipboard, notes, and settings. |
-| **Glass Files** | A single-instance GTK4 file manager with tabs, split view, Quick Look, batch rename, archive tools, trash, undo/redo, and `org.freedesktop.FileManager1`. |
+| **Glass Files** | A single-instance GTK4 file manager with tabs, split view, Quick Look, image rotation, batch rename, archive tools, trash, undo/redo, and `org.freedesktop.FileManager1`. |
 | **Wallpaper pipeline** | Waypaper + mpvpaper for images and video; Wallust recolours Kitty, Waybar, Rofi, SwayNC, Wlogout, Hyprland, and Cava. |
 | **Settings** | A glass settings popout for accent colour, top bar, dock, widgets, wallpaper, and app management. |
 | **Session pieces** | Hyprlock lock screen, Hypridle, cliphist clipboard history, screenshot/recording shortcuts, and a wlogout session menu. |

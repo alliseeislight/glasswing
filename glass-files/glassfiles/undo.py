@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from . import ops, trash, util
+from . import ops, thumbs, trash, util
 
 
 class UndoAction:
@@ -51,6 +51,34 @@ class RenameAction(UndoAction):
 
     def redo(self):
         return [self._apply(old, new) for old, new in self.pairs]
+
+
+class RotateAction(UndoAction):
+    def __init__(self, paths, degrees):
+        self.paths = list(paths)
+        self.degrees = int(degrees)
+        n = len(self.paths)
+        self.label = f"Rotate {n} image{'s' if n != 1 else ''}"
+
+    def _apply(self, degrees):
+        out = []
+        for path in self.paths:
+            if not os.path.isfile(path):
+                out.append(False)
+                continue
+            try:
+                ops.rotate_image(path, degrees)
+                thumbs.forget(path)
+                out.append(True)
+            except Exception:
+                out.append(False)
+        return out
+
+    def undo(self):
+        return self._apply(-self.degrees)
+
+    def redo(self):
+        return self._apply(self.degrees)
 
 
 class MoveAction(UndoAction):

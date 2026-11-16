@@ -46,9 +46,6 @@ class Pane(Gtk.Box):
         self.search_query = ""
         self.trash_records: dict[str, dict] = {}
         self.starred: list[str] = []
-        self._labels: dict[str, Gtk.Widget] = {}
-        self._rename_entry = None
-        self._rename_old = None
         self._type_buffer = ""
         self._type_timeout = 0
         self._menu_handled = False
@@ -270,8 +267,6 @@ class Pane(Gtk.Box):
                             stack.set_visible_child_name("thumb")
 
                 self.window.thumbpool.request(path, "large", done)
-        if path:
-            self._labels[path] = w["label"]
         box.set_tooltip_text(
             f"{name}\n{util.pretty_type(path or '', model.mime_of(info))}"
             + ("" if model.is_dir(info) else f" \u00b7 {util.human_size(model.size_of(info))}")
@@ -283,9 +278,6 @@ class Pane(Gtk.Box):
         box = list_item.get_child()
         if box is None:
             return
-        path = getattr(box, "_glass_path", None)
-        if path and self._labels.get(path) is box._glass["label"]:
-            self._labels.pop(path, None)
         box._glass["pic"].set_paintable(None)
 
     def _drag_paths(self, list_item):
@@ -380,8 +372,6 @@ class Pane(Gtk.Box):
         if key == "name":
             child._glass["label"].set_text(model.display_of(info, self.base_path))
             child._glass["icon"].set_from_gicon(model.icon_for(info))
-            if path:
-                self._labels[path] = child._glass["label"]
             child._glass_path = path
             thumbcache = model.thumb_of(info)
             if thumbcache:
@@ -413,14 +403,8 @@ class Pane(Gtk.Box):
             child.set_tooltip_text(loc or "")
 
     def _cell_unbind(self, factory, list_item, key):
-        if key != "name":
-            return
-        child = list_item.get_child()
-        if child is None:
-            return
-        path = getattr(child, "_glass_path", None)
-        if path and self._labels.get(path) is child._glass["label"]:
-            self._labels.pop(path, None)
+        # No per-row state to release here; the item is reused by the factory.
+        return
 
     def _on_header_click(self, gesture, n_press, x, y):
         if y > 34 or not self._columns:
@@ -461,7 +445,6 @@ class Pane(Gtk.Box):
         self.model.connect("changed", self._on_model_changed)
 
     def _load(self, location, keep_history=True):
-        self._cancel_rename()
         self._thumb_serial += 1
         if self.model is not None:
             self.model.stop()
@@ -838,6 +821,9 @@ class Pane(Gtk.Box):
             if ext in (".zip", ".tar", ".gz", ".xz", ".zst", ".7z", ".bz2", ".rar"):
                 entries += [("Extract Here", "win.extract"), ("Extract To\u2026", "win.extract-to")]
             entries += [("Compress\u2026", "win.compress")]
+        if self.source_kind != "trash" and any(thumbs.can_rotate(p) for p in paths):
+            entries += [None, ("Rotate Left", "win.rotate-left"),
+                        ("Rotate Right", "win.rotate-right")]
         entries += [None, ("Copy Path", "win.copy-path"), ("Properties", "win.properties")]
         if self.source_kind == "starred":
             entries += [("Remove Star", "win.star-toggle")]
@@ -847,11 +833,18 @@ class Pane(Gtk.Box):
 
     def show_background_menu(self, x, y):
         entries = [("New Folder", "win.new-folder"), ("New File\u2026", "win.new-file"),
-                   ("Paste", "win.paste"), (None, None),
-                   ("Select All", "win.select-all"), ("Invert Selection", "win.invert-selection")]
+                   ("Paste", "win.paste")]
         if self.source_kind == "trash":
-            entries = [("Empty Trash", "win.empty-trash"), (None, None), ("Select All", "win.select-all")]
+            entries = [("Empty Trash", "win.empty-trash")]
         entries += [(None, None)]
+        select_sub = ui.item_menu([
+            ("All", "win.select-all"),
+            ("Images", "win.select-images"),
+            ("Folders", "win.select-folders"),
+            ("Files", "win.select-files"),
+            (None, None),
+            ("Invert Selection", "win.invert-selection"),
+        ])
         view_sub = ui.item_menu([("Icons", "win.view-grid"), ("List", "win.view-list"),
                                  ("Compact", "win.view-compact")])
         sort_sub = ui.item_menu([("Name", "win.sort-name"), ("Size", "win.sort-size"),
@@ -868,6 +861,7 @@ class Pane(Gtk.Box):
             else:
                 sec.append(text, action)
         menu.append_section(None, sec)
+        menu.append_submenu("Select", select_sub)
         menu.append_submenu("View", view_sub)
         menu.append_submenu("Sort", sort_sub)
         menu.append("Show Hidden Files", "win.show-hidden-toggle")
@@ -879,69 +873,11 @@ class Pane(Gtk.Box):
     # -------------------------------------------------------------- rename
     def begin_rename(self, path=None):
         path = path or self.first_selected()
-        if not path:
-            return
-        label_widget = self._labels.get(path)
-        if label_widget is None or label_widget.get_parent() is None:
+        if path:
+            # The rename dialog is intentionally used for every view. Inline
+            # editors inside Gtk.GridView/ColumnView items cannot reliably take
+            # keyboard focus, and a failed focus grab made rename look broken.
             self.window.rename_dialog(path)
-            return
-        parent = label_widget.get_parent()
-        entry = Gtk.Entry()
-        entry.add_css_class("field")
-        entry.set_text(os.path.basename(path.rstrip(os.sep)))
-        entry.set_hexpand(True)
-        entry.set_width_chars(10)
-        label_widget.set_visible(False)
-        parent.append(entry)
-        entry.grab_focus()
-        entry.select_region(0, len(entry.get_text()))
-        self._rename_entry = entry
-        self._rename_old = path
-        done = {"done": False}
-
-        def finish(commit):
-            if done["done"]:
-                return
-            done["done"] = True
-            text = entry.get_text()
-            entry.unparent()
-            label_widget.set_visible(True)
-            self._rename_entry = None
-            self._rename_old = None
-            if not commit:
-                return
-            old = path
-            try:
-                new = self.window.do_rename(old, text)
-            except Exception as e:
-                self.emit("toast", str(e))
-                return
-            if new:
-                self._select_path_soon(new)
-
-        entry.connect("activate", lambda e: finish(True))
-        focus = Gtk.EventControllerFocus.new()
-        focus.connect("leave", lambda c: GLib.timeout_add(60, lambda: finish(False) or False))
-        entry.add_controller(focus)
-        key = Gtk.EventControllerKey.new()
-
-        def on_key(c, keyval, keycode, state):
-            if keyval == Gdk.KEY_Escape:
-                finish(False)
-                return True
-            return False
-
-        key.connect("key-pressed", on_key)
-        entry.add_controller(key)
-
-    def _cancel_rename(self):
-        if self._rename_entry is not None:
-            entry = self._rename_entry
-            self._rename_entry = None
-            try:
-                entry.get_parent().remove(entry)
-            except Exception:
-                pass
 
     def _select_path_soon(self, path):
         def do():

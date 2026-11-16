@@ -47,8 +47,13 @@ packages, not virtualenv packages.
 - Search current folder as you type; Enter searches recursively with `fd`.
 - Quick Look (`Space`): images, video poster frames, PDF pages, audio tags,
   text/code, archives, folder contents.
-- Rename (inline + batch find/replace, numbering, case), duplicate, compress
-  (`zip`, `7z`, `tar.gz`), extract, checksums.
+- Rename dialog (reliable in every view) and batch find/replace, numbering,
+  case; duplicate, compress (`zip`, `7z`, `tar.gz`), extract, checksums.
+- Rotate JPEG, PNG, WebP, BMP, and TIFF images left/right in place from the
+  context menu or Quick Look. EXIF orientation is normalised, writes are
+  atomic, and thumbnails refresh immediately.
+- Quick Look slideshow (`P`) and select-by-type shortcuts for images, folders,
+  and files.
 - Copy/cut/paste with progress, speed, ETA, cancel; conflict dialog with
   replace/skip/keep-both/apply-to-all; atomic moves on the same filesystem.
 - Trash by default (freedesktop spec, per-mount `.Trash-$uid`), restore, empty,
@@ -73,6 +78,8 @@ packages, not virtualenv packages.
 | `Ctrl+Shift+N` | new folder |
 | `F2` | rename |
 | `Space` | Quick Look |
+| `R` / `Shift+R` | rotate image right / left in Quick Look |
+| `P` | play/pause Quick Look slideshow |
 | `Delete` / `Shift+Delete` | trash / delete permanently |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | undo / redo |
 | `Ctrl+C` / `X` / `V` | copy / cut / paste |
