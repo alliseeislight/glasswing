@@ -8,8 +8,9 @@ import time
 import gi
 
 gi.require_version("GdkPixbuf", "2.0")
+gi.require_version("Gio", "2.0")
 gi.require_version("Pango", "1.0")
-from gi.repository import GdkPixbuf, Pango
+from gi.repository import GdkPixbuf, Gio, Pango
 
 from glass import *
 import settings_logic as L
@@ -101,6 +102,37 @@ class SliderRow:
         v = int(round(scale.get_value()))
         self.val.set_text(str(v))
         self.page.queue(self.key, v)
+
+
+class FloatSliderRow:
+    def __init__(self, page, title, key, lo, hi, step=0.01, digits=2):
+        self.page, self.key, self.guard = page, key, False
+        self.step, self.digits = step, digits
+        self.box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        t = label(title, "plain")
+        t.set_size_request(140, -1)
+        self.scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, lo, hi, step)
+        self.scale.set_draw_value(False)
+        self.scale.set_hexpand(True)
+        self.val = label("", "pct", xalign=1.0)
+        self.box.append(t)
+        self.box.append(self.scale)
+        self.box.append(self.val)
+        self.scale.connect("value-changed", self.changed)
+        self.set(lo)
+
+    def set(self, v):
+        self.guard = True
+        self.scale.set_value(float(v))
+        self.guard = False
+        self.val.set_text(f"{float(v):.{self.digits}f}")
+
+    def changed(self, scale):
+        if self.guard:
+            return
+        v = round(scale.get_value() / self.step) * self.step
+        self.val.set_text(f"{v:.{self.digits}f}")
+        self.page.queue(self.key, round(v, 4))
 
 
 class LookPage(Page):
@@ -293,9 +325,10 @@ class WallpaperPage(Page):
     TW, TH = 172, 97
 
     @staticmethod
-    def load_thumb(path):
+    def load_thumb(path, tw=None, th=None):
         try:
-            tw, th = WallpaperPage.TW, WallpaperPage.TH
+            tw = tw or WallpaperPage.TW
+            th = th or WallpaperPage.TH
             info = GdkPixbuf.Pixbuf.get_file_info(path)
             w, h = info[1], info[2]
             k = max(tw / w, th / h)
@@ -353,6 +386,271 @@ class WallpaperPage(Page):
             self.say("Palette saved — pick a wallpaper to apply it")
             return
         bg(lambda: apply_palette_files(wall), lambda _r: (self.say("Colour style applied"), self.on_show()))
+
+
+class LockPage(Page):
+    DATE_FORMATS = [
+        ("Weekday, date", "%A, %d %B"),
+        ("Weekday", "%A"),
+        ("Day, month", "%d %B"),
+        ("Short", "%d %b %Y"),
+        ("ISO", "%Y-%m-%d"),
+    ]
+
+    def build(self):
+        self.timer = None
+        self.syncing = False
+        self.chooser = None
+        self.preview_token = 0
+        self.rows = []
+        self.switches = {}
+        self.date_btns = {}
+
+        self.box.append(sec("Lock screen wallpaper"))
+        self.preview = Gtk.Picture()
+        self.preview.set_size_request(256, 144)
+        self.preview.set_content_fit(Gtk.ContentFit.COVER)
+        self.preview.add_css_class("thumb")
+        self.preview.set_overflow(Gtk.Overflow.HIDDEN)
+        self.preview.set_halign(Gtk.Align.START)
+        self.box.append(self.preview)
+        self.wall_label = label("", "dimtext")
+        self.box.append(self.wall_label)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        for text, fn in (
+            ("Blurred desktop", self.use_blurred),
+            ("Use desktop wallpaper", self.use_desktop),
+            ("Choose image…", self.choose_wall),
+        ):
+            b = Gtk.Button(label=text)
+            b.add_css_class("chip")
+            b.connect("clicked", lambda _b, f=fn: f())
+            row.append(b)
+        self.box.append(row)
+
+        self.box.append(Gtk.Separator())
+        self.box.append(sec("Background"))
+        self.slider("Blur size", "blur_size", 0, 20)
+        self.slider("Blur passes", "blur_passes", 1, 6)
+        self.slider("Brightness", "brightness", 0.10, 1.00, 0.01, 2)
+        self.slider("Vibrancy", "vibrancy", 0.00, 0.80, 0.01, 2)
+        self.slider("Noise", "noise", 0.000, 0.080, 0.005, 3)
+
+        self.box.append(Gtk.Separator())
+        self.box.append(sec("Card"))
+        self.slider("Width", "card_width", 320, 720)
+        self.slider("Height", "card_height", 240, 620)
+        self.slider("Opacity", "card_opacity", 0.00, 0.80, 0.01, 2)
+        self.slider("Rounding", "card_rounding", 0, 64)
+        self.slider("Border", "card_border", 0, 4)
+
+        self.box.append(Gtk.Separator())
+        self.box.append(sec("Clock & labels"))
+        self.switch("24-hour clock", "clock_24h")
+        self.switch("Show seconds", "clock_seconds")
+        self.switch("Show date", "show_date")
+        self.switch("Show username", "show_user")
+        self.slider("Clock size", "clock_size", 48, 150)
+        self.slider("Date size", "date_size", 10, 34)
+
+        self.date_flow = Gtk.FlowBox()
+        self.date_flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.date_flow.set_max_children_per_line(3)
+        self.date_flow.set_min_children_per_line(2)
+        self.date_flow.set_column_spacing(8)
+        self.date_flow.set_row_spacing(8)
+        for title, fmt in self.DATE_FORMATS:
+            b = Gtk.Button(label=title)
+            b.add_css_class("chip")
+            b.connect("clicked", lambda _b, f=fmt: self.set_date_format(f))
+            self.date_flow.append(b)
+            self.date_btns[fmt] = b
+        self.box.append(self.date_flow)
+
+        self.box.append(Gtk.Separator())
+        self.box.append(sec("Password field"))
+        self.placeholder = Gtk.Entry()
+        self.placeholder.set_placeholder_text("Placeholder text")
+        self.placeholder.connect("changed", self.placeholder_changed)
+        self.box.append(self.placeholder)
+        self.slider("Width", "input_width", 200, 600)
+        self.slider("Height", "input_height", 36, 90)
+        self.slider("Rounding", "input_rounding", 0, 45)
+
+        reset = Gtk.Button(label="Reset lock screen")
+        reset.add_css_class("chip")
+        reset.set_halign(Gtk.Align.START)
+        reset.set_margin_top(6)
+        reset.connect("clicked", lambda _b: self.reset())
+        self.box.append(reset)
+
+    def slider(self, title, key, lo, hi, step=None, digits=2):
+        if step is None:
+            row = SliderRow(self, title, key, lo, hi)
+        else:
+            row = FloatSliderRow(self, title, key, lo, hi, step, digits)
+        self.rows.append(row)
+        self.box.append(row.box)
+
+    def switch(self, title, key):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        row.append(label(title, "plain", hexpand=True))
+        sw = Gtk.Switch()
+        sw.set_valign(Gtk.Align.CENTER)
+        sw.connect("state-set", lambda _s, state, k=key: self.flip(k, state))
+        row.append(sw)
+        self.box.append(row)
+        self.switches[key] = sw
+
+    def on_show(self):
+        st = L.load_lock_settings()
+        self.syncing = True
+        for row in self.rows:
+            row.set(st.get(row.key, L.LOCK_DEFAULTS.get(row.key, 0)))
+        for key, sw in self.switches.items():
+            sw.set_active(bool(st.get(key, L.LOCK_DEFAULTS.get(key))))
+        self.placeholder.set_text(str(st.get("placeholder", "")))
+        self.mark_date(st.get("date_format", L.LOCK_DEFAULTS["date_format"]))
+        self.show_wall(str(st.get("wallpaper", "screenshot")))
+        self.syncing = False
+
+    def flip(self, key, state):
+        if not self.syncing:
+            self.queue(key, bool(state))
+        return False
+
+    def placeholder_changed(self, _entry):
+        if not self.syncing:
+            self.queue("placeholder", self.placeholder.get_text())
+
+    def mark_date(self, fmt):
+        for key, b in self.date_btns.items():
+            (b.add_css_class if key == fmt else b.remove_css_class)("current")
+
+    def set_date_format(self, fmt):
+        self.mark_date(fmt)
+        self.queue("date_format", fmt)
+
+    def queue(self, key, value):
+        if self.syncing:
+            return
+        st = L.load_lock_settings()
+        st[key] = value
+        L.save_lock_settings(st)
+        if self.timer:
+            GLib.source_remove(self.timer)
+        self.timer = GLib.timeout_add(400, self.apply)
+        self.say("Saving lock screen…")
+
+    def apply(self):
+        self.timer = None
+        try:
+            L.apply_lock_settings(L.load_lock_settings())
+        except Exception as e:
+            self.say(str(e))
+            return False
+        self.say("Saved — changes appear next time you lock.")
+        return False
+
+    def reset(self):
+        if self.timer:
+            GLib.source_remove(self.timer)
+            self.timer = None
+        L.save_lock_settings(dict(L.LOCK_DEFAULTS))
+        self.on_show()
+        self.apply()
+
+    def show_wall(self, path):
+        self.preview_token += 1
+        token = self.preview_token
+        self.preview.set_paintable(None)
+        if path == "screenshot":
+            src = L.current_wallpaper()
+            if src and src.lower().endswith(L.VID):
+                self.wall_label.set_text("Blurred desktop (from the current video wallpaper)")
+                return
+            self.wall_label.set_text("Blurred desktop")
+            if src:
+                self.load_preview(src, token)
+            return
+        self.wall_label.set_text(os.path.basename(path) or path)
+        self.load_preview(path, token)
+
+    def load_preview(self, path, token):
+        def work():
+            return WallpaperPage.load_thumb(path, 256, 144)
+
+        def done(pix):
+            if token != self.preview_token or pix is None:
+                return
+            self.preview.set_paintable(Gdk.Texture.new_for_pixbuf(pix))
+
+        bg(work, done)
+
+    def use_blurred(self):
+        self.set_wallpaper("screenshot")
+
+    def use_desktop(self):
+        path = L.current_wallpaper()
+        if not path or not os.path.isfile(path):
+            self.say("No current desktop wallpaper was found.")
+            return
+        if path.lower().endswith(L.VID):
+            out = os.path.join(HOME, ".local", "share", "glasswing", "lock-wallpaper.png")
+            self.say("Extracting a frame from the video wallpaper…")
+
+            def work():
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                rc, _t = run_rc("ffmpeg", "-y", "-ss", "1", "-i", path,
+                                "-frames:v", "1", out, timeout=30)
+                return rc == 0 and os.path.isfile(out)
+
+            def done(ok):
+                if ok:
+                    self.set_wallpaper(out)
+                else:
+                    self.say("Couldn't extract a frame from the video wallpaper.")
+            bg(work, done)
+            return
+        self.set_wallpaper(path)
+
+    def choose_wall(self):
+        chooser = Gtk.FileChooserNative(
+            title="Choose lock screen wallpaper",
+            transient_for=getattr(self.owner, "win", None),
+            action=Gtk.FileChooserAction.OPEN,
+        )
+        chooser.set_modal(True)
+        filt = Gtk.FileFilter()
+        filt.set_name("Images")
+        for ext in L.LOCK_IMG:
+            filt.add_pattern("*" + ext)
+            filt.add_pattern("*" + ext.upper())
+        chooser.add_filter(filt)
+        if os.path.isdir(L.WALLS):
+            chooser.set_current_folder(Gio.File.new_for_path(L.WALLS))
+        chooser.connect("response", self.wall_chosen)
+        self.chooser = chooser
+        chooser.show()
+
+    def wall_chosen(self, chooser, response):
+        self.chooser = None
+        if response != Gtk.ResponseType.ACCEPT:
+            return
+        f = chooser.get_file()
+        path = f.get_path() if f else ""
+        if not path or not os.path.isfile(path):
+            self.say("That image could not be opened.")
+            return
+        if not path.lower().endswith(L.LOCK_IMG):
+            self.say("Choose a JPG, PNG, WebP, or BMP image.")
+            return
+        self.set_wallpaper(path)
+
+    def set_wallpaper(self, path):
+        self.queue("wallpaper", path)
+        self.show_wall(path)
 
 
 class LinksPage(Page):
@@ -741,6 +1039,7 @@ class SettingsPopup(Popup):
     PAGES = [
         ("󰔎", "Look & feel", LookPage),
         ("󰸉", "Wallpaper & theme", WallpaperPage),
+        ("󰌾", "Lock screen", LockPage),
         ("󰖩", "Quick links", LinksPage),
         ("󰌌", "Keybinds", KeybindsPage),
         ("󰐥", "Startup", StartupPage),

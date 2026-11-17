@@ -26,8 +26,8 @@ outline, and just enough colour to catch the light.
 | **Popouts** | GTK4 layer-shell panels for Wi-Fi, Bluetooth, volume, battery, calendar, clipboard, notes, and settings. |
 | **Glass Files** | A single-instance GTK4 file manager with tabs, split view, Quick Look, image rotation, batch rename, archive tools, trash, undo/redo, and `org.freedesktop.FileManager1`. |
 | **Wallpaper pipeline** | Waypaper + mpvpaper for images and video; Wallust recolours Kitty, Waybar, Rofi, SwayNC, Wlogout, Hyprland, and Cava. |
-| **Settings** | A glass settings popout for accent colour, top bar, dock, widgets, wallpaper, and app management. |
-| **Session pieces** | Hyprlock lock screen, Hypridle, cliphist clipboard history, screenshot/recording shortcuts, and a wlogout session menu. |
+| **Settings** | A glass settings popout for accent colour, top bar, dock, widgets, wallpaper, lock-screen wallpaper and layout, and app management. |
+| **Session pieces** | Hyprlock lock screen with configurable wallpaper, blur, card, clock, and password field; Hypridle, cliphist clipboard history, screenshot/recording shortcuts, and a wlogout session menu. |
 
 ## Screenshots
 
@@ -102,7 +102,9 @@ systemd user service.
 - Click the clock for the calendar, the dynamic pill for notifications, and the
   volume module for the volume popup.
 - Open the settings popout with `Super + I` to tune the accent, bar, dock,
-  widgets, and wallpaper.
+  widgets, and wallpaper. The **Lock screen** page picks the lock-screen
+  wallpaper, blur and dimming, card size and opacity, 12/24-hour clock, date
+  format, username, and password-field styling.
 
 The sample wallpaper is installed to `~/Pictures/wallpapers/glasswing.jpg`.
 Drop more images or videos into that folder; Waypaper and `Super + W` use it as
@@ -150,7 +152,7 @@ Screenshots go to `~/Pictures/Screenshots`; recordings go to
 | `~/.config/wallust/` | wallpaper colour templates and targets |
 | `~/.config/waypaper/` | wallpaper backend and folder |
 | `~/.config/wlogout/` | session menu |
-| `~/.config/glass/` | shell settings, file-manager prefs, accent, user Hyprland overrides |
+| `~/.config/glass/` | shell settings, file-manager prefs, lock-screen prefs, accent, user Hyprland overrides |
 | `~/.local/share/glasswing/glass-files/` | Glass Files source |
 | `~/.local/state/glasswing/` | install backups and manifests |
 

@@ -1,5 +1,6 @@
 """Pure-Python helpers for the glass settings app (no GTK here, so it can be tested alone)."""
 import glob
+import html
 import json
 import os
 import re
@@ -8,15 +9,43 @@ import time
 
 CFG_DIR = os.path.expanduser("~/.config/glass")
 SETTINGS = os.path.join(CFG_DIR, "settings.json")
+LOCK_SETTINGS = os.path.join(CFG_DIR, "lock.json")
 USER_LUA = os.path.join(CFG_DIR, "hypr-user.lua")
 HYPR = os.path.expanduser("~/.config/hypr")
+LOCK_CONF = os.path.join(HYPR, "hyprlock.conf")
 WALLS = os.path.expanduser("~/Pictures/wallpapers")
 WAYPAPER_INI = os.path.expanduser("~/.config/waypaper/config.ini")
 WALLUST_TOML = os.path.expanduser("~/.config/wallust/wallust.toml")
 IMG = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")
 VID = (".mp4", ".webm", ".mkv", ".mov")
+LOCK_IMG = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 PALETTES = ["dark16", "darkcomp16", "harddark16", "softdark16"]
 SWATCHES = ["#a8b8e6", "#9fd8c0", "#e8aebf", "#efbf9a", "#c3aee8", "#9fcfe8", "#d9cc9a", "#aeb8c4"]
+
+LOCK_DEFAULTS = {
+    "wallpaper": "screenshot",
+    "blur_size": 8,
+    "blur_passes": 4,
+    "brightness": 0.72,
+    "vibrancy": 0.25,
+    "noise": 0.012,
+    "card_width": 440,
+    "card_height": 380,
+    "card_opacity": 0.40,
+    "card_rounding": 36,
+    "card_border": 1,
+    "clock_24h": True,
+    "clock_seconds": False,
+    "clock_size": 88,
+    "show_date": True,
+    "date_format": "%A, %d %B",
+    "date_size": 18,
+    "show_user": True,
+    "input_width": 320,
+    "input_height": 52,
+    "input_rounding": 26,
+    "placeholder": "Enter password",
+}
 
 _STAMP = str(int(time.time()))
 
@@ -284,6 +313,217 @@ def set_autostart(text, idx, enabled):
         return text
     lines[idx] = m.group(1) + ("" if enabled else "-- ") + m.group(3)
     return "\n".join(lines)
+
+
+# ---------------- lock screen ----------------
+_LOCK_BLOCK = re.compile(r"(?ms)^([ \t]*)([A-Za-z][\w-]*)\s*\{\s*\n(.*?)^\1\}")
+
+
+def _lock_blocks(text, header):
+    return [m for m in _LOCK_BLOCK.finditer(text) if m.group(2) == header]
+
+
+def _lock_fields(text, header, index=0):
+    blocks = _lock_blocks(text, header)
+    if index >= len(blocks):
+        return {}
+    fields = {}
+    for line in blocks[index].group(3).splitlines():
+        m = re.match(r"^\s*([A-Za-z][\w-]*)\s*=\s*(.*?)\s*$", line)
+        if m:
+            fields[m.group(1)] = m.group(2)
+    return fields
+
+
+def _lock_patch(text, header, index, values):
+    """Change fields in one existing Hyprlock widget without rewriting the file."""
+    blocks = _lock_blocks(text, header)
+    if index >= len(blocks):
+        return text
+    block = blocks[index]
+    lines = block.group(3).rstrip("\n").splitlines()
+    for key, value in values.items():
+        pat = re.compile(r"^(\s*)" + re.escape(key) + r"\s*=")
+        for i, line in enumerate(lines):
+            m = pat.match(line)
+            if m:
+                lines[i] = f"{m.group(1)}{key} = {value}"
+                break
+        else:
+            lines.append(f"    {key} = {value}")
+    inner = "\n".join(lines) + "\n"
+    return text[:block.start(3)] + inner + text[block.end(3):]
+
+
+def _lock_int(value, default):
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _lock_float(value, default):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _lock_size(value, default):
+    m = re.match(r"\s*(\d+)\s*,\s*(\d+)", value or "")
+    return (int(m.group(1)), int(m.group(2))) if m else default
+
+
+def _lock_opacity(value, default):
+    m = re.search(r"rgba\(\s*[^,]+,\s*[^,]+,\s*[^,]+,\s*([0-9.]+)\s*\)", value or "")
+    return float(m.group(1)) if m else default
+
+
+def read_lock_config():
+    """Seed the settings page from the current (possibly hand-edited) config."""
+    text = read(LOCK_CONF)
+    st = dict(LOCK_DEFAULTS)
+    bg = _lock_fields(text, "background")
+    shape = _lock_fields(text, "shape")
+    inp = _lock_fields(text, "input-field")
+
+    path = os.path.expanduser(bg.get("path", "screenshot").strip())
+    st["wallpaper"] = path or "screenshot"
+    st["blur_size"] = _lock_int(bg.get("blur_size"), st["blur_size"])
+    st["blur_passes"] = _lock_int(bg.get("blur_passes"), st["blur_passes"])
+    st["brightness"] = _lock_float(bg.get("brightness"), st["brightness"])
+    st["vibrancy"] = _lock_float(bg.get("vibrancy"), st["vibrancy"])
+    st["noise"] = _lock_float(bg.get("noise"), st["noise"])
+
+    w, h = _lock_size(shape.get("size"), (st["card_width"], st["card_height"]))
+    st["card_width"], st["card_height"] = w, h
+    st["card_opacity"] = _lock_opacity(shape.get("color"), st["card_opacity"])
+    st["card_rounding"] = _lock_int(shape.get("rounding"), st["card_rounding"])
+    st["card_border"] = _lock_int(shape.get("border_size"), st["card_border"])
+
+    labels = [_lock_fields(text, "label", i) for i in range(3)]
+    clock = labels[0].get("text", "$TIME")
+    st["clock_24h"] = "%I" not in clock and "%-I" not in clock
+    st["clock_seconds"] = "%S" in clock
+    st["clock_size"] = _lock_int(labels[0].get("font_size"), st["clock_size"])
+    date = labels[1].get("text", "")
+    st["show_date"] = bool(date.strip())
+    m = re.search(r'date\s+\+"([^"]*)"', date)
+    if m:
+        st["date_format"] = m.group(1)
+    st["date_size"] = _lock_int(labels[1].get("font_size"), st["date_size"])
+    st["show_user"] = bool(labels[2].get("text", "").strip())
+
+    iw, ih = _lock_size(inp.get("size"), (st["input_width"], st["input_height"]))
+    st["input_width"], st["input_height"] = iw, ih
+    st["input_rounding"] = _lock_int(inp.get("rounding"), st["input_rounding"])
+    ph = re.sub(r"<[^>]+>", "", inp.get("placeholder_text", "")).strip()
+    if ph:
+        st["placeholder"] = html.unescape(ph)
+    return st
+
+
+def load_lock_settings():
+    if not os.path.isfile(LOCK_SETTINGS):
+        st = read_lock_config()
+        save_lock_settings(st)
+        return st
+    try:
+        data = json.loads(read(LOCK_SETTINGS, "{}"))
+    except ValueError:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    st = dict(LOCK_DEFAULTS)
+    for key, default in LOCK_DEFAULTS.items():
+        if key not in data:
+            continue
+        value = data[key]
+        if isinstance(default, bool):
+            st[key] = value if isinstance(value, bool) else default
+        elif isinstance(default, int):
+            st[key] = _lock_int(value, default)
+        elif isinstance(default, float):
+            st[key] = _lock_float(value, default)
+        elif isinstance(value, str):
+            st[key] = value
+    return st
+
+
+def save_lock_settings(st):
+    out = dict(LOCK_DEFAULTS)
+    for key in LOCK_DEFAULTS:
+        if key in st:
+            out[key] = st[key]
+    write_atomic(LOCK_SETTINGS, json.dumps(out, indent=2) + "\n")
+    return out
+
+
+def _lock_clock_text(st):
+    fmt = "%H:%M" if st["clock_24h"] else "%-I:%M"
+    if st["clock_seconds"]:
+        fmt += ":%S"
+    if not st["clock_24h"]:
+        fmt += " %p"
+    return f'cmd[update:1000] date +"{fmt}"'
+
+
+def _lock_date_text(st):
+    if not st["show_date"]:
+        return " "
+    return f'cmd[update:60000] date +"{st["date_format"]}"'
+
+
+def _lock_placeholder(st):
+    text = html.escape(str(st.get("placeholder", "")), quote=False)
+    return f'<span foreground="##ffffff99">{text}</span>' if text else '<span foreground="##ffffff99"></span>'
+
+
+def apply_lock_settings(st=None):
+    """Write the managed values into ~/.config/hypr/hyprlock.conf."""
+    st = save_lock_settings(st or load_lock_settings())
+    text = read(LOCK_CONF)
+    if not text:
+        raise ValueError("hyprlock.conf was not found")
+
+    wallpaper = os.path.expanduser(str(st["wallpaper"]))
+    if wallpaper != "screenshot" and not os.path.isfile(wallpaper):
+        raise ValueError("The selected lock screen wallpaper no longer exists")
+
+    text = _lock_patch(text, "background", 0, {
+        "path": wallpaper,
+        "blur_size": int(st["blur_size"]),
+        "blur_passes": int(st["blur_passes"]),
+        "brightness": f'{float(st["brightness"]):.2f}',
+        "vibrancy": f'{float(st["vibrancy"]):.2f}',
+        "noise": f'{float(st["noise"]):.3f}',
+    })
+    text = _lock_patch(text, "shape", 0, {
+        "size": f'{int(st["card_width"])}, {int(st["card_height"])}',
+        "color": f'rgba(20, 22, 32, {float(st["card_opacity"]):.2f})',
+        "rounding": int(st["card_rounding"]),
+        "border_size": int(st["card_border"]),
+    })
+    text = _lock_patch(text, "label", 0, {
+        "text": _lock_clock_text(st),
+        "font_size": int(st["clock_size"]),
+    })
+    text = _lock_patch(text, "label", 1, {
+        "text": _lock_date_text(st),
+        "font_size": int(st["date_size"]),
+    })
+    text = _lock_patch(text, "label", 2, {
+        "text": "$USER" if st["show_user"] else " ",
+    })
+    text = _lock_patch(text, "input-field", 0, {
+        "size": f'{int(st["input_width"])}, {int(st["input_height"])}',
+        "rounding": int(st["input_rounding"]),
+        "placeholder_text": _lock_placeholder(st),
+    })
+
+    backup_once(LOCK_CONF)
+    write_atomic(LOCK_CONF, text)
+    return True
 
 
 # ---------------- misc ----------------
