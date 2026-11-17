@@ -653,6 +653,286 @@ class LockPage(Page):
         self.show_wall(path)
 
 
+class LoginPage(Page):
+    DATE_FORMATS = [
+        ("Weekday, date", "ddd MMM d"),
+        ("Full date", "dddd, MMMM d"),
+        ("ISO date", "yyyy-MM-dd"),
+        ("Day/month/year", "dd/MM/yyyy"),
+    ]
+
+    def build(self):
+        self.timer = None
+        self.pending = {}
+        self.syncing = False
+        self.chooser = None
+        self.preview_token = 0
+        self.rows = []
+        self.date_btns = {}
+        self.clock_key = ""
+        self.date_key = ""
+
+        st = L.read_sddm_settings()
+        self.ready = bool(st.get("theme"))
+
+        self.box.append(sec("Display manager"))
+        self.theme_label = label("", "plain")
+        self.box.append(self.theme_label)
+        note = label("Settings here apply to the SDDM login screen before you sign in.", "dimtext")
+        note.set_wrap(True)
+        self.box.append(note)
+
+        if not self.ready:
+            missing = label("No SDDM theme was detected. This page is only active on systems using SDDM.", "dimtext")
+            missing.set_wrap(True)
+            self.box.append(missing)
+            return
+
+        self.theme_label.set_text(f"Theme: {st.get('theme', '')}")
+        self.box.append(sec("Login screen wallpaper"))
+        self.preview = Gtk.Picture()
+        self.preview.set_size_request(256, 144)
+        self.preview.set_content_fit(Gtk.ContentFit.COVER)
+        self.preview.add_css_class("thumb")
+        self.preview.set_overflow(Gtk.Overflow.HIDDEN)
+        self.preview.set_halign(Gtk.Align.START)
+        self.box.append(self.preview)
+        self.wall_label = label("", "dimtext")
+        self.box.append(self.wall_label)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        for text, fn in (
+            ("Use desktop wallpaper", self.use_desktop),
+            ("Choose image/video…", self.choose_wall),
+            ("Theme default", self.restore_default),
+        ):
+            b = Gtk.Button(label=text)
+            b.add_css_class("chip")
+            b.connect("clicked", lambda _b, f=fn: f())
+            row.append(b)
+        self.box.append(row)
+
+        if st.get("blur_key") or st.get("dim_key"):
+            self.box.append(Gtk.Separator())
+            self.box.append(sec("Background"))
+            if st.get("blur_key"):
+                self.slider("Blur", st["blur_key"], 0, 64)
+            if st.get("dim_key"):
+                self.slider("Dim", st["dim_key"], 0.0, 0.8, 0.01, 2)
+
+        if st.get("clock_key") or st.get("date_key"):
+            self.box.append(Gtk.Separator())
+            self.box.append(sec("Clock & date"))
+            self.clock_key = st.get("clock_key", "")
+            self.date_key = st.get("date_key", "")
+            if self.clock_key:
+                self.clock24 = self.switch_row("24-hour clock", self.clock_changed)
+                self.clock_seconds = self.switch_row("Show seconds", self.clock_changed)
+            if self.date_key:
+                flow = Gtk.FlowBox()
+                flow.set_selection_mode(Gtk.SelectionMode.NONE)
+                flow.set_max_children_per_line(3)
+                flow.set_min_children_per_line(2)
+                flow.set_column_spacing(8)
+                flow.set_row_spacing(8)
+                for title, fmt in self.DATE_FORMATS:
+                    b = Gtk.Button(label=title)
+                    b.add_css_class("chip")
+                    b.connect("clicked", lambda _b, f=fmt: self.set_date_format(f))
+                    flow.append(b)
+                    self.date_btns[fmt] = b
+                self.box.append(flow)
+
+    def slider(self, title, key, lo, hi, step=None, digits=2):
+        if step is None:
+            row = SliderRow(self, title, key, lo, hi)
+        else:
+            row = FloatSliderRow(self, title, key, lo, hi, step, digits)
+        self.rows.append(row)
+        self.box.append(row.box)
+
+    def switch_row(self, title, callback):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        row.append(label(title, "plain", hexpand=True))
+        sw = Gtk.Switch()
+        sw.set_valign(Gtk.Align.CENTER)
+        sw.connect("state-set", lambda _s, _state: callback())
+        row.append(sw)
+        self.box.append(row)
+        return sw
+
+    def on_show(self):
+        if not self.ready:
+            return
+        st = L.read_sddm_settings()
+        self.syncing = True
+        self.theme_label.set_text(f"Theme: {st.get('theme', '')}")
+        for row in self.rows:
+            row.set(st.get(row.key, 0))
+        if self.clock_key:
+            self.clock24.set_active(bool(st.get("clock_24h")))
+            self.clock_seconds.set_active(bool(st.get("clock_seconds")))
+        self.mark_date(st.get("date_format", ""))
+        self.show_wall(st.get("wallpaper", ""), st.get("wallpaper_kind", "image"))
+        self.syncing = False
+
+    def clock_changed(self):
+        if self.syncing or not self.clock_key:
+            return False
+        fmt = "HH:mm" if self.clock24.get_active() else "h:mm"
+        if self.clock_seconds.get_active():
+            fmt += ":ss"
+        self.queue(self.clock_key, fmt)
+        return False
+
+    def mark_date(self, fmt):
+        for key, b in self.date_btns.items():
+            (b.add_css_class if key == fmt else b.remove_css_class)("current")
+
+    def set_date_format(self, fmt):
+        self.mark_date(fmt)
+        if self.date_key:
+            self.queue(self.date_key, fmt)
+
+    def queue(self, key, value):
+        if self.syncing:
+            return
+        self.pending[key] = value
+        if self.timer:
+            GLib.source_remove(self.timer)
+        self.timer = GLib.timeout_add(400, self.apply)
+        self.say("Saving login screen…")
+
+    def apply(self):
+        self.timer = None
+        updates, self.pending = self.pending, {}
+        if not updates:
+            return False
+        try:
+            L.set_sddm_values(updates)
+        except Exception as e:
+            self.say(str(e))
+            return False
+        self.say("Saved — changes appear on the next login screen.")
+        return False
+
+    def show_wall(self, path, kind):
+        self.preview_token += 1
+        token = self.preview_token
+        self.preview.set_paintable(None)
+        if not path or not os.path.isfile(path):
+            self.wall_label.set_text("Theme background")
+            return
+        name = os.path.basename(path) or path
+        if kind == "video":
+            self.wall_label.set_text(f"{name} (video)")
+            out = os.path.join(HOME, ".cache", "glass", "login-preview.png")
+
+            def work():
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                rc, _t = run_rc("ffmpeg", "-y", "-ss", "0.5", "-i", path,
+                                "-frames:v", "1", out, timeout=30)
+                return out if rc == 0 and os.path.isfile(out) else ""
+
+            def done(frame):
+                if token == self.preview_token and frame:
+                    self.load_preview(frame, token)
+
+            bg(work, done)
+            return
+        self.wall_label.set_text(name)
+        self.load_preview(path, token)
+
+    def load_preview(self, path, token):
+        def work():
+            return WallpaperPage.load_thumb(path, 256, 144)
+
+        def done(pix):
+            if token != self.preview_token or pix is None:
+                return
+            self.preview.set_paintable(Gdk.Texture.new_for_pixbuf(pix))
+
+        bg(work, done)
+
+    def use_desktop(self):
+        path = L.current_wallpaper()
+        if not path or not os.path.isfile(path):
+            self.say("No current desktop wallpaper was found.")
+            return
+        self.set_wallpaper(path)
+
+    def choose_wall(self):
+        chooser = Gtk.FileChooserNative(
+            title="Choose login screen wallpaper",
+            transient_for=getattr(self.owner, "win", None),
+            action=Gtk.FileChooserAction.OPEN,
+        )
+        chooser.set_modal(True)
+        filt = Gtk.FileFilter()
+        filt.set_name("Images and videos")
+        for ext in L.IMG + L.VID:
+            filt.add_pattern("*" + ext)
+            filt.add_pattern("*" + ext.upper())
+        chooser.add_filter(filt)
+        if os.path.isdir(L.WALLS):
+            chooser.set_current_folder(Gio.File.new_for_path(L.WALLS))
+        chooser.connect("response", self.wall_chosen)
+        self.chooser = chooser
+        chooser.show()
+
+    def wall_chosen(self, chooser, response):
+        self.chooser = None
+        if response != Gtk.ResponseType.ACCEPT:
+            return
+        f = chooser.get_file()
+        path = f.get_path() if f else ""
+        if not path or not os.path.isfile(path):
+            self.say("That file could not be opened.")
+            return
+        if not path.lower().endswith(L.IMG + L.VID):
+            self.say("Choose an image or video file.")
+            return
+        self.set_wallpaper(path)
+
+    def set_wallpaper(self, path):
+        self.say("Copying the login wallpaper…")
+
+        def work():
+            try:
+                L.set_sddm_wallpaper(path)
+                return ""
+            except Exception as e:
+                return str(e)
+
+        def done(error):
+            if error:
+                self.say(error)
+                return
+            self.say("Saved — changes appear on the next login screen.")
+            self.on_show()
+
+        bg(work, done)
+
+    def restore_default(self):
+        self.say("Restoring the theme default…")
+
+        def work():
+            try:
+                L.set_sddm_default_wallpaper()
+                return ""
+            except Exception as e:
+                return str(e)
+
+        def done(error):
+            if error:
+                self.say(error)
+                return
+            self.say("Theme default restored.")
+            self.on_show()
+
+        bg(work, done)
+
+
 class LinksPage(Page):
     LINKS = [
         ("󰖩", "Wi-Fi & networks", "nm-connection-editor", "networkmanager"),
@@ -1039,7 +1319,8 @@ class SettingsPopup(Popup):
     PAGES = [
         ("󰔎", "Look & feel", LookPage),
         ("󰸉", "Wallpaper & theme", WallpaperPage),
-        ("󰌾", "Lock screen", LockPage),
+        ("󰍂", "Login screen", LoginPage),
+        ("󰌾", "Screen lock", LockPage),
         ("󰖩", "Quick links", LinksPage),
         ("󰌌", "Keybinds", KeybindsPage),
         ("󰐥", "Startup", StartupPage),

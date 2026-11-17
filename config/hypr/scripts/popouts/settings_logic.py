@@ -1,4 +1,5 @@
 """Pure-Python helpers for the glass settings app (no GTK here, so it can be tested alone)."""
+import configparser
 import glob
 import html
 import json
@@ -13,6 +14,10 @@ LOCK_SETTINGS = os.path.join(CFG_DIR, "lock.json")
 USER_LUA = os.path.join(CFG_DIR, "hypr-user.lua")
 HYPR = os.path.expanduser("~/.config/hypr")
 LOCK_CONF = os.path.join(HYPR, "hyprlock.conf")
+SDDM_CONF = "/etc/sddm.conf"
+SDDM_CONF_DIR = "/etc/sddm.conf.d"
+SDDM_THEMES = "/usr/share/sddm/themes"
+SDDM_THEMES_LOCAL = "/usr/local/share/sddm/themes"
 WALLS = os.path.expanduser("~/Pictures/wallpapers")
 WAYPAPER_INI = os.path.expanduser("~/.config/waypaper/config.ini")
 WALLUST_TOML = os.path.expanduser("~/.config/wallust/wallust.toml")
@@ -524,6 +529,264 @@ def apply_lock_settings(st=None):
     backup_once(LOCK_CONF)
     write_atomic(LOCK_CONF, text)
     return True
+
+
+# ---------------- SDDM login screen ----------------
+def _sddm_conf_files():
+    files = [SDDM_CONF]
+    try:
+        files.extend(sorted(glob.glob(os.path.join(SDDM_CONF_DIR, "*.conf"))))
+    except OSError:
+        pass
+    return [p for p in files if os.path.isfile(p)]
+
+
+def _sddm_main_config():
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    parser.optionxform = str
+    try:
+        parser.read(_sddm_conf_files())
+    except (configparser.Error, OSError):
+        return parser
+    return parser
+
+
+def _sddm_values(path):
+    parser = configparser.RawConfigParser(interpolation=None, strict=False)
+    parser.optionxform = str
+    try:
+        parser.read(path)
+    except (configparser.Error, OSError):
+        return {}
+    if parser.has_section("General"):
+        return dict(parser.items("General"))
+    values = {}
+    for section in parser.sections():
+        values.update(dict(parser.items(section)))
+    return values
+
+
+def _sddm_lookup(values, *names, default=""):
+    lower = {k.lower(): v for k, v in values.items()}
+    for name in names:
+        value = lower.get(name.lower())
+        if value is not None:
+            return value
+    return default
+
+
+def _sddm_actual_key(values, *names):
+    lower = {k.lower(): k for k in values}
+    for name in names:
+        key = lower.get(name.lower())
+        if key:
+            return key
+    return ""
+
+
+def _sddm_unquote(value):
+    value = (value or "").strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
+
+
+def _sddm_kind(path):
+    return "video" if str(path).lower().endswith(VID) else "image"
+
+
+def _sddm_qml_string(text, prop):
+    m = re.search(r'property\s+string\s+' + re.escape(prop) + r'\s*:\s*"([^"]+)"', text)
+    return os.path.expanduser(m.group(1)) if m else ""
+
+
+def sddm_theme_info():
+    cfg = _sddm_main_config()
+    try:
+        name = _sddm_unquote(cfg.get("Theme", "Current", fallback=""))
+    except (configparser.Error, ValueError):
+        name = ""
+    configured = ""
+    try:
+        configured = _sddm_unquote(cfg.get("Theme", "ThemeDir", fallback=""))
+    except (configparser.Error, ValueError):
+        pass
+
+    dirs = [configured, SDDM_THEMES, SDDM_THEMES_LOCAL]
+    theme_dir = ""
+    if name:
+        for base in dirs:
+            if not base:
+                continue
+            candidate = os.path.join(base, name)
+            if os.path.isdir(candidate):
+                theme_dir = candidate
+                break
+
+    main = read(os.path.join(theme_dir, "Main.qml")) if theme_dir else ""
+    return {
+        "name": name,
+        "dir": theme_dir,
+        "conf": os.path.join(theme_dir, "theme.conf") if theme_dir else "",
+        "main": main,
+        "cache": _sddm_qml_string(main, "cachePath"),
+        "kind": _sddm_qml_string(main, "cacheKindPath"),
+    }
+
+
+def _sddm_default_path(info, values):
+    candidates = []
+    if info["dir"]:
+        candidates.extend([
+            os.path.join(info["dir"], "assets", "background.jpg"),
+            os.path.join(info["dir"], "background.jpg"),
+        ])
+    bg = _sddm_unquote(_sddm_lookup(values, "background", "Background"))
+    if bg:
+        candidates.append(bg if os.path.isabs(bg) else os.path.join(info["dir"], bg))
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    return ""
+
+
+def read_sddm_settings():
+    info = sddm_theme_info()
+    values = _sddm_values(info["conf"]) if info["conf"] else {}
+    out = dict(info)
+    out.update({
+        "theme": info["name"],
+        "theme_dir": info["dir"],
+        "theme_conf": info["conf"],
+        "blur_key": _sddm_actual_key(values, "backgroundBlur"),
+        "dim_key": _sddm_actual_key(values, "backgroundDim"),
+        "clock_key": _sddm_actual_key(values, "clockFormat"),
+        "date_key": _sddm_actual_key(values, "dateFormat"),
+        "blur": 48,
+        "dim": 0.12,
+        "clock_format": "h:mm",
+        "date_format": "ddd MMM d",
+        "clock_24h": False,
+        "clock_seconds": False,
+        "default_wallpaper": _sddm_default_path(info, values),
+        "wallpaper": "",
+        "wallpaper_kind": "image",
+    })
+    if out["blur_key"]:
+        out["blur"] = _lock_int(_sddm_lookup(values, out["blur_key"]), 48)
+    if out["dim_key"]:
+        out["dim"] = _lock_float(_sddm_lookup(values, out["dim_key"]), 0.12)
+    if out["clock_key"]:
+        out["clock_format"] = _sddm_unquote(_sddm_lookup(values, out["clock_key"])) or "h:mm"
+        out["clock_24h"] = "H" in out["clock_format"]
+        out["clock_seconds"] = "s" in out["clock_format"]
+    if out["date_key"]:
+        out["date_format"] = _sddm_unquote(_sddm_lookup(values, out["date_key"]))
+
+    cache = info["cache"]
+    if cache and os.path.isfile(cache):
+        out["wallpaper"] = cache
+        kind = read(info["kind"], "").strip().lower()
+        out["wallpaper_kind"] = kind if kind in ("image", "video") else _sddm_kind(cache)
+    else:
+        fallback = _sddm_default_path(info, values)
+        out["wallpaper"] = fallback
+        out["wallpaper_kind"] = _sddm_kind(fallback)
+    return out
+
+
+def _sddm_patch(text, key, value):
+    value = str(value).replace("\n", " ").replace("\r", " ")
+    pattern = re.compile(r"(?m)^([ \t]*)" + re.escape(key) + r"\s*=(.*)$", re.I)
+    match = pattern.search(text)
+    if match:
+        raw = match.group(2).strip()
+        quote = raw[0] if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'" else ""
+        return text[:match.start()] + f"{match.group(1)}{key}={quote}{value}{quote}" + text[match.end():]
+
+    general = re.search(r"(?m)^\[General\][ \t]*\r?$", text)
+    if general:
+        start = general.end()
+        next_section = re.search(r"(?m)^\[[^\]]+\][ \t]*\r?$", text[start:])
+        end = start + next_section.start() if next_section else len(text)
+        block = text[start:end]
+        if block and not block.endswith("\n"):
+            block += "\n"
+        return text[:start] + block + f"{key}={value}\n" + text[end:]
+    return text.rstrip("\n") + f"\n[General]\n{key}={value}\n"
+
+
+def set_sddm_values(updates):
+    info = sddm_theme_info()
+    conf = info["conf"]
+    if not conf or not os.path.isfile(conf):
+        raise ValueError("This SDDM theme has no editable theme.conf")
+    text = read(conf)
+    for key, value in updates.items():
+        text = _sddm_patch(text, key, value)
+    backup_once(conf)
+    write_atomic(conf, text)
+    return True
+
+
+def _sddm_copy_public(src, dst):
+    if os.path.realpath(src) == os.path.realpath(dst):
+        os.chmod(dst, 0o644)
+        return
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    tmp = dst + f".tmp-{os.getpid()}"
+    shutil.copyfile(src, tmp)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, dst)
+
+
+def set_sddm_wallpaper(src):
+    src = os.path.expanduser(str(src))
+    if not os.path.isfile(src):
+        raise ValueError("That login wallpaper no longer exists")
+    info = sddm_theme_info()
+    if not info["name"]:
+        raise ValueError("No SDDM theme was detected")
+
+    kind = _sddm_kind(src)
+    cache = info["cache"]
+    if cache:
+        try:
+            _sddm_copy_public(src, cache)
+            kind_path = info["kind"] or cache + ".kind"
+            write_atomic(kind_path, kind + "\n")
+            os.chmod(kind_path, 0o644)
+            return cache
+        except OSError:
+            if os.path.exists(cache):
+                raise
+
+    if not info["dir"]:
+        raise ValueError("No SDDM theme directory was found")
+    values = _sddm_values(info["conf"])
+    target_dir = os.path.join(info["dir"], "assets")
+    if not os.path.isdir(target_dir):
+        target_dir = os.path.join(info["dir"], "backgrounds")
+    if not os.path.isdir(target_dir):
+        target_dir = info["dir"]
+    ext = os.path.splitext(src)[1].lower() or (".mp4" if kind == "video" else ".jpg")
+    target = os.path.join(target_dir, "login-wallpaper" + ext)
+    _sddm_copy_public(src, target)
+
+    key = _sddm_actual_key(values, "Background", "background")
+    if not key:
+        key = "Background" if re.search(r"config\.Background", info["main"]) else "background"
+    set_sddm_values({key: os.path.relpath(target, info["dir"])})
+    return target
+
+
+def set_sddm_default_wallpaper():
+    info = sddm_theme_info()
+    values = _sddm_values(info["conf"]) if info["conf"] else {}
+    path = _sddm_default_path(info, values)
+    if not path:
+        raise ValueError("This SDDM theme has no default wallpaper")
+    return set_sddm_wallpaper(path)
 
 
 # ---------------- misc ----------------

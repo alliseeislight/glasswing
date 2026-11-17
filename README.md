@@ -26,8 +26,8 @@ outline, and just enough colour to catch the light.
 | **Popouts** | GTK4 layer-shell panels for Wi-Fi, Bluetooth, volume, battery, calendar, clipboard, notes, and settings. |
 | **Glass Files** | A single-instance GTK4 file manager with tabs, split view, Quick Look, image rotation, batch rename, archive tools, trash, undo/redo, and `org.freedesktop.FileManager1`. |
 | **Wallpaper pipeline** | Waypaper + mpvpaper for images and video; Wallust recolours Kitty, Waybar, Rofi, SwayNC, Wlogout, Hyprland, and Cava. |
-| **Settings** | A glass settings popout for accent colour, top bar, dock, widgets, wallpaper, lock-screen wallpaper and layout, and app management. |
-| **Session pieces** | Hyprlock lock screen with configurable wallpaper, blur, card, clock, and password field; Hypridle, cliphist clipboard history, screenshot/recording shortcuts, and a wlogout session menu. |
+| **Settings** | A glass settings popout for accent colour, top bar, dock, widgets, wallpaper, SDDM login-screen wallpaper, session lock-screen wallpaper and layout, and app management. |
+| **Session pieces** | Hyprlock session lock screen with configurable wallpaper, blur, card, clock, and password field; Hypridle, cliphist clipboard history, screenshot/recording shortcuts, and a wlogout session menu. |
 
 ## Screenshots
 
@@ -102,9 +102,11 @@ systemd user service.
 - Click the clock for the calendar, the dynamic pill for notifications, and the
   volume module for the volume popup.
 - Open the settings popout with `Super + I` to tune the accent, bar, dock,
-  widgets, and wallpaper. The **Lock screen** page picks the lock-screen
-  wallpaper, blur and dimming, card size and opacity, 12/24-hour clock, date
-  format, username, and password-field styling.
+  widgets, and wallpaper. The **Login screen** page changes the active SDDM
+  theme's wallpaper and, when the theme exposes them, its blur, dimming, clock,
+  and date format. The **Screen lock** page controls the Hyprlock session lock
+  screen: wallpaper, blur and dimming, card size and opacity, 12/24-hour clock,
+  date format, username, and password-field styling.
 
 The sample wallpaper is installed to `~/Pictures/wallpapers/glasswing.jpg`.
 Drop more images or videos into that folder; Waypaper and `Super + W` use it as
@@ -205,6 +207,9 @@ media/                      compressed demo and screenshots
   “Show in folder” works. Use `--no-file-manager` to keep your current handler.
 - The SDDM blur step is optional and only runs if the theme file is writable by
   your user. Set `GLASSWING_SDDM_WALLPAPER` to point at a different theme file.
+- The **Login screen** page writes only to the active SDDM theme's
+  `theme.conf` and wallpaper cache; it does not edit `/etc/sddm.conf`. The
+  active theme directory and cache must be writable by your user.
 
 ## Credits
 
