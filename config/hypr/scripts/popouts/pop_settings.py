@@ -494,104 +494,66 @@ class LockPreview(Gtk.Overlay):
 
 
 class StatGraph(Gtk.Box):
-    """Compact usage sparkline with a percentage, detail line, and current-use bar."""
+    """Compact donut-style pie chart with the percentage in the middle."""
 
-    HISTORY = 48
-
-    def __init__(self, title, color, storage=False):
+    def __init__(self, title, color):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.color = tuple(max(0, min(1, c / 255.0)) for c in color)
-        self.history = []
+        self.fraction = 0.0
 
         head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         head.append(label(title.upper(), "sec", hexpand=True))
-        self.pct = label("—", "big")
-        head.append(self.pct)
         self.append(head)
 
         self.graph = Gtk.DrawingArea()
-        self.graph.set_size_request(-1, 88)
-        self.graph.set_hexpand(True)
+        self.graph.set_size_request(148, 148)
+        self.graph.set_halign(Gtk.Align.CENTER)
         self.graph.add_css_class("statgraph")
         self.graph.set_draw_func(self.draw)
         self.append(self.graph)
 
-        self.bar = Gtk.ProgressBar()
-        self.bar.add_css_class("statbar")
-        if storage:
-            self.bar.add_css_class("storage")
-        self.append(self.bar)
-
         self.detail = label("", "dimtext")
         self.detail.set_wrap(True)
+        self.detail.set_justify(Gtk.Justification.CENTER)
         self.append(self.detail)
 
     def update(self, fraction, detail):
-        fraction = max(0.0, min(1.0, float(fraction)))
-        if not self.history:
-            self.history = [fraction] * self.HISTORY
-        else:
-            self.history.append(fraction)
-            self.history = self.history[-self.HISTORY:]
-        self.pct.set_text(f"{fraction * 100:.0f}%")
-        self.bar.set_fraction(fraction)
+        self.fraction = max(0.0, min(1.0, float(fraction)))
         self.detail.set_text(detail)
         self.graph.queue_draw()
 
-    @staticmethod
-    def _point(value, pad, width, height):
-        x = pad + value * (width - 2 * pad)
-        y = height - pad - value * (height - 2 * pad)
-        return x, y
-
     def draw(self, _area, cr, width, height):
-        if width <= 8 or height <= 8 or not self.history:
+        if width <= 8 or height <= 8:
             return
-        pad = 8
         r, g, b = self.color
+        cx, cy = width / 2.0, height / 2.0
+        radius = min(width, height) / 2.0 - 10.0
+        thickness = max(12.0, radius * 0.30)
+        ring = radius - thickness / 2.0
+        start = -math.pi / 2.0
 
-        cr.set_source_rgba(1, 1, 1, 0.035)
-        cr.rectangle(0, 0, width, height)
-        cr.fill()
-        for level in (0.25, 0.5, 0.75):
-            _x, y = self._point(level, pad, width, height)
-            cr.set_source_rgba(1, 1, 1, 0.07)
-            cr.move_to(pad, y)
-            cr.line_to(width - pad, y)
+        cr.set_source_rgba(1, 1, 1, 0.085)
+        cr.set_line_width(thickness)
+        cr.set_line_cap(cairo.LINE_CAP_BUTT)
+        cr.arc(cx, cy, ring, 0, 2 * math.pi)
+        cr.stroke()
+
+        if self.fraction > 0:
+            cr.set_source_rgba(r, g, b, 0.96)
+            cr.set_line_width(thickness)
+            cr.set_line_cap(cairo.LINE_CAP_ROUND if self.fraction < 0.98 else cairo.LINE_CAP_BUTT)
+            end = start + 2 * math.pi * self.fraction
+            if self.fraction >= 0.999:
+                cr.arc(cx, cy, ring, 0, 2 * math.pi)
+            else:
+                cr.arc(cx, cy, ring, start, end)
             cr.stroke()
 
-        count = len(self.history)
-        points = []
-        for i, value in enumerate(self.history):
-            x = pad + (i / max(1, count - 1)) * (width - 2 * pad)
-            points.append((x, height - pad - value * (height - 2 * pad)))
-
-        cr.move_to(points[0][0], height - pad)
-        for x, y in points:
-            cr.line_to(x, y)
-        cr.line_to(points[-1][0], height - pad)
-        cr.close_path()
-        fill = cairo.LinearGradient(0, pad, 0, height - pad)
-        fill.add_color_stop_rgba(0, r, g, b, 0.38)
-        fill.add_color_stop_rgba(1, r, g, b, 0.02)
-        cr.set_source(fill)
-        cr.fill()
-
-        cr.move_to(*points[0])
-        for point in points[1:]:
-            cr.line_to(*point)
-        cr.set_source_rgba(r, g, b, 0.95)
-        cr.set_line_width(2.0)
-        cr.stroke()
-
-        x, y = points[-1]
-        cr.arc(x, y, 3.5, 0, 2 * math.pi)
-        cr.set_source_rgba(1, 1, 1, 0.95)
-        cr.fill()
-        cr.arc(x, y, 3.5, 0, 2 * math.pi)
-        cr.set_source_rgba(r, g, b, 1.0)
-        cr.set_line_width(1.5)
-        cr.stroke()
+        font_size = max(22.0, min(34.0, radius * 0.42))
+        LockPreview._text(cr, f"{self.fraction * 100:.0f}%", cx, cy - 5,
+                          font_size, (1, 1, 1, 0.97), center=True, bold=True)
+        LockPreview._text(cr, "USED", cx, cy + max(16.0, font_size * 0.62),
+                          max(8.0, font_size * 0.34), (1, 1, 1, 0.50), center=True)
 
 
 class LookPage(Page):
@@ -1815,7 +1777,7 @@ class SystemPage(Page):
         self.box.append(Gtk.Separator())
         self.box.append(sec("Storage"))
         home_name = os.path.basename(L.HOME) or L.HOME
-        self.disk = StatGraph(f"Disk · {home_name}", (159, 216, 192), storage=True)
+        self.disk = StatGraph(f"Disk · {home_name}", (159, 216, 192))
         self.box.append(self.disk)
         self.disk_extra = label("", "dimtext")
         self.box.append(self.disk_extra)
