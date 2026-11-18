@@ -218,6 +218,22 @@ button.thumbbtn { background: transparent; background-image: none; border: 2px s
 button.thumbbtn:hover { background-color: rgba(255,255,255,0.12); }
 button.thumbbtn.on { border: 2px solid @glass_accent; }
 .thumb { border-radius: 14px; }
+.thumbbox { background-color: rgba(255,255,255,0.08); }
+label.videobadge {
+  color: white;
+  font-size: 17px;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 3px 5px;
+  border-radius: 20px;
+  background-color: rgba(0,0,0,0.55);
+  border: 1px solid rgba(255,255,255,0.22);
+}
+.preview {
+  border-radius: 18px;
+  background-color: rgba(8,12,22,0.92);
+  border: 1px solid rgba(255,255,255,0.18);
+}
 
 .notes-scrolled {
   background-color: rgba(255,255,255,0.04);

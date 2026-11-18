@@ -1,5 +1,9 @@
+import hashlib
 import json
+import math
 import os
+import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -10,7 +14,8 @@ import gi
 gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("Gio", "2.0")
 gi.require_version("Pango", "1.0")
-from gi.repository import GdkPixbuf, Gio, Pango
+gi.require_version("PangoCairo", "1.0")
+from gi.repository import GdkPixbuf, Gio, Pango, PangoCairo
 
 from glass import *
 import settings_logic as L
@@ -135,6 +140,358 @@ class FloatSliderRow:
         self.page.queue(self.key, round(v, 4))
 
 
+class LockPreview(Gtk.Overlay):
+    """Small, Windows-style preview of what the login or lock screen will look like."""
+
+    W, H = 320, 180
+
+    def __init__(self, mode):
+        super().__init__()
+        self.mode = mode
+        self.state = {}
+        self._bg_token = 0
+        self._bg_timer = None
+        self._bg_sig = None
+        self._has_bg = False
+
+        self.set_size_request(self.W, self.H)
+        self.set_overflow(Gtk.Overflow.HIDDEN)
+        self.set_halign(Gtk.Align.START)
+        self.set_hexpand(False)
+        self.set_vexpand(False)
+        self.add_css_class("preview")
+
+        self.bg = Gtk.Picture()
+        self.bg.set_size_request(self.W, self.H)
+        self.bg.set_content_fit(Gtk.ContentFit.COVER)
+        self.bg.set_hexpand(True)
+        self.bg.set_vexpand(True)
+        self.set_child(self.bg)
+
+        self.layer = Gtk.DrawingArea()
+        self.layer.set_size_request(self.W, self.H)
+        self.layer.set_hexpand(True)
+        self.layer.set_vexpand(True)
+        self.layer.set_draw_func(self.draw)
+        self.add_overlay(self.layer)
+
+        GLib.timeout_add_seconds(1, self._tick)
+
+    def set_state(self, state):
+        self.state = dict(state or {})
+        self.layer.queue_draw()
+        if self._bg_timer:
+            GLib.source_remove(self._bg_timer)
+        self._bg_timer = GLib.timeout_add(110, self._render_bg)
+
+    def _tick(self):
+        if self.get_mapped():
+            self.layer.queue_draw()
+        return True
+
+    def _source(self):
+        st = self.state
+        if self.mode == "sddm":
+            path = str(st.get("wallpaper", "") or "")
+            kind = str(st.get("wallpaper_kind", "image"))
+        else:
+            path = str(st.get("wallpaper", "screenshot") or "screenshot")
+            if path == "screenshot":
+                path = L.current_wallpaper()
+            kind = "video" if path.lower().endswith(L.VID) else "image"
+        return path, kind
+
+    def _params(self):
+        st = self.state
+        if self.mode == "sddm":
+            try:
+                blur = max(0.0, min(12.0, float(st.get("blur", 48)) / 8.0))
+            except (TypeError, ValueError):
+                blur = 6.0
+            return blur, 1.0, 1.0
+        try:
+            blur_size = float(st.get("blur_size", 8))
+            passes = float(st.get("blur_passes", 4))
+            blur = max(0.0, min(14.0, blur_size * 0.55 + max(0.0, passes - 1) * 0.65))
+            bright = max(0.10, min(1.5, float(st.get("brightness", 0.72))))
+            sat = max(0.0, min(2.0, 1.0 + float(st.get("vibrancy", 0.25))))
+            return blur, bright, sat
+        except (TypeError, ValueError):
+            return 6.0, 0.72, 1.25
+
+    def _render_bg(self):
+        self._bg_timer = None
+        path, kind = self._source()
+        blur, bright, sat = self._params()
+        sig = (path, kind, round(blur, 2), round(bright, 3), round(sat, 3))
+        if sig == self._bg_sig:
+            return False
+        self._bg_sig = sig
+        self._bg_token += 1
+        token = self._bg_token
+
+        if not path or not os.path.isfile(path):
+            self._has_bg = False
+            self.bg.set_paintable(None)
+            self.layer.queue_draw()
+            return False
+
+        os.makedirs(os.path.join(HOME, ".cache", "glass"), exist_ok=True)
+        out = os.path.join(HOME, ".cache", "glass", f"lock-preview-{self.mode}-{token}.png")
+
+        def work():
+            return self._make_bg(path, kind, blur, bright, sat, out)
+
+        def done(result):
+            if token != self._bg_token:
+                if result:
+                    try:
+                        os.remove(result)
+                    except OSError:
+                        pass
+                return
+            if result:
+                try:
+                    pix = GdkPixbuf.Pixbuf.new_from_file(result)
+                    self.bg.set_paintable(Gdk.Texture.new_for_pixbuf(pix))
+                    self._has_bg = True
+                except Exception:
+                    self._has_bg = False
+                    self.bg.set_paintable(None)
+                try:
+                    os.remove(result)
+                except OSError:
+                    pass
+            else:
+                self._has_bg = False
+                self.bg.set_paintable(None)
+            self.layer.queue_draw()
+
+        bg(work, done)
+        return False
+
+    @staticmethod
+    def _make_bg(src, kind, blur, brightness, saturation, out):
+        frame = src
+        temporary = ""
+        try:
+            if kind == "video" or src.lower().endswith(L.VID):
+                if not shutil.which("ffmpeg"):
+                    return ""
+                temporary = out + ".frame.png"
+                rc, _text = run_rc(
+                    "ffmpeg", "-y", "-ss", "0.5", "-i", src, "-frames:v", "1",
+                    "-vf", f"scale={LockPreview.W}:{LockPreview.H}:force_original_aspect_ratio=increase,"
+                           f"crop={LockPreview.W}:{LockPreview.H}",
+                    temporary, timeout=25,
+                )
+                if rc != 0 or not os.path.isfile(temporary):
+                    return ""
+                frame = temporary
+
+            magick = shutil.which("magick") or shutil.which("convert")
+            if not magick:
+                return ""
+            cmd = [
+                magick, frame, "-auto-orient",
+                "-resize", f"{LockPreview.W}x{LockPreview.H}^",
+                "-gravity", "center",
+                "-extent", f"{LockPreview.W}x{LockPreview.H}",
+            ]
+            if blur > 0.05:
+                cmd += ["-blur", f"0x{blur:.1f}"]
+            if abs(brightness - 1.0) > 0.01 or abs(saturation - 1.0) > 0.01:
+                cmd += ["-modulate", f"{brightness * 100:.1f},{saturation * 100:.1f},100"]
+            cmd.append(out)
+            rc, _text = run_rc(*cmd, timeout=25)
+            return out if rc == 0 and os.path.isfile(out) else ""
+        except Exception:
+            return ""
+        finally:
+            if temporary:
+                try:
+                    os.remove(temporary)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _rounded(cr, x, y, w, h, r):
+        r = max(0.0, min(r, w / 2.0, h / 2.0))
+        cr.new_sub_path()
+        cr.arc(x + w - r, y + r, r, -math.pi / 2.0, 0)
+        cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2.0)
+        cr.arc(x + r, y + h - r, r, math.pi / 2.0, math.pi)
+        cr.arc(x + r, y + r, r, math.pi, 3.0 * math.pi / 2.0)
+        cr.close_path()
+
+    @staticmethod
+    def _text(cr, text, x, y, size, color=(1, 1, 1, 1), center=True, bold=False):
+        text = str(text)
+        if not text:
+            return
+        layout = PangoCairo.create_layout(cr)
+        layout.set_text(text, -1)
+        font = Pango.FontDescription(f"Inter {max(1.0, float(size)):.1f}")
+        font.set_weight(Pango.Weight.BOLD if bold else Pango.Weight.NORMAL)
+        layout.set_font_description(font)
+        tw, th = layout.get_pixel_size()
+        if center:
+            x -= tw / 2.0
+            y -= th / 2.0
+        cr.set_source_rgba(*color)
+        cr.move_to(x, y)
+        PangoCairo.show_layout(cr, layout)
+
+    def draw(self, _area, cr, width, height):
+        if width <= 1 or height <= 1:
+            return
+        if self.mode == "sddm":
+            try:
+                dim = max(0.0, min(1.0, float(self.state.get("dim", 0.12))))
+            except (TypeError, ValueError):
+                dim = 0.12
+            if dim > 0:
+                cr.set_source_rgba(0, 0, 0, dim)
+                cr.paint()
+            self._draw_sddm(cr, width, height)
+        else:
+            self._draw_hyprlock(cr, width, height)
+
+    def _draw_sddm(self, cr, width, height):
+        st = self.state
+        s = height / 900.0
+        cx = width / 2.0
+        clock_size = max(14.0, min(34.0, 130.0 * s))
+        clock = self._qt_clock(st.get("clock_format", "h:mm"))
+        clock_y = height * 0.16 + clock_size / 2.0
+        self._text(cr, clock, cx, clock_y, clock_size, (1, 1, 1, 0.97), bold=True)
+
+        date_size = max(7.0, min(15.0, 22.0 * s))
+        date = self._qt_date(st.get("date_format", "ddd MMM d"))
+        self._text(cr, date, cx, clock_y + clock_size / 2.0 + date_size / 2.0 + 5.0,
+                   date_size, (1, 1, 1, 0.72))
+
+        user = os.environ.get("USER") or "user"
+        avatar_r = max(10.0, min(22.0, 36.0 * s))
+        avatar_y = height * 0.70
+        cr.arc(cx, avatar_y, avatar_r, 0, 2 * math.pi)
+        cr.set_source_rgba(0.66, 0.72, 0.90, 0.82)
+        cr.fill()
+        self._text(cr, user[:1].upper(), cx, avatar_y, avatar_r * 0.95,
+                   (0.06, 0.07, 0.10, 0.95), bold=True)
+        self._text(cr, user, cx, avatar_y + avatar_r + 8.0,
+                   max(7.0, min(12.0, 16.0 * s)), (1, 1, 1, 0.86))
+
+        iw = max(100.0, min(width - 28.0, 280.0 * s))
+        ih = max(14.0, min(24.0, 44.0 * s))
+        ix, iy = cx - iw / 2.0, height * 0.86 - ih / 2.0
+        self._rounded(cr, ix, iy, iw, ih, ih / 2.0)
+        cr.set_source_rgba(1, 1, 1, 0.10)
+        cr.fill_preserve()
+        cr.set_source_rgba(1, 1, 1, 0.25)
+        cr.set_line_width(1.0)
+        cr.stroke()
+        self._text(cr, "Enter Password", cx, iy + ih / 2.0,
+                   max(6.0, min(10.0, 13.0 * s)), (1, 1, 1, 0.55))
+
+    def _draw_hyprlock(self, cr, width, height):
+        st = self.state
+        s = height / 900.0
+        cx, cy = width / 2.0, height / 2.0
+
+        def number(key, default, lo, hi):
+            try:
+                return max(lo, min(hi, float(st.get(key, default))))
+            except (TypeError, ValueError):
+                return default
+
+        card_w = max(28.0, min(width - 18.0, number("card_width", 440, 0, 1200) * s))
+        card_h = max(28.0, min(height - 18.0, number("card_height", 380, 0, 1200) * s))
+        card_x, card_y = cx - card_w / 2.0, cy + 10.0 * s - card_h / 2.0
+        radius = max(0.0, min(card_w / 2.0, card_h / 2.0,
+                              number("card_rounding", 36, 0, 200) * s))
+        self._rounded(cr, card_x, card_y, card_w, card_h, radius)
+        cr.set_source_rgba(0.08, 0.09, 0.13, number("card_opacity", 0.40, 0, 0.8))
+        cr.fill_preserve()
+        if number("card_border", 1, 0, 20) > 0:
+            cr.set_source_rgba(1, 1, 1, 0.26)
+            cr.set_line_width(max(0.8, number("card_border", 1, 0, 20) * s))
+            cr.stroke()
+        else:
+            cr.new_path()
+
+        clock_size = max(10.0, min(32.0, number("clock_size", 88, 24, 300) * s))
+        clock = self._hypr_clock()
+        self._text(cr, clock, cx, cy + 120.0 * s, clock_size, (1, 1, 1, 0.96), bold=True)
+
+        if st.get("show_date", True):
+            date_size = max(6.0, min(16.0, number("date_size", 18, 6, 80) * s))
+            date = self._hypr_date()
+            self._text(cr, date, cx, cy + 50.0 * s, date_size, (1, 1, 1, 0.70))
+
+        if st.get("show_user", True):
+            self._text(cr, os.environ.get("USER") or "user", cx, cy - 20.0 * s,
+                       max(6.0, min(14.0, 16.0 * s)), (0.66, 0.72, 0.90, 0.95))
+
+        iw = max(56.0, min(width - 24.0, number("input_width", 320, 80, 1200) * s))
+        ih = max(12.0, min(30.0, number("input_height", 52, 20, 180) * s))
+        ix, iy = cx - iw / 2.0, cy - 90.0 * s - ih / 2.0
+        inset = max(0.0, min(iw / 2.0, ih / 2.0,
+                            number("input_rounding", 26, 0, 100) * s))
+        self._rounded(cr, ix, iy, iw, ih, inset)
+        cr.set_source_rgba(1, 1, 1, 0.10)
+        cr.fill_preserve()
+        cr.set_source_rgba(0.66, 0.72, 0.90, 0.50)
+        cr.set_line_width(1.0)
+        cr.stroke()
+        placeholder = re.sub(r"<[^>]+>", "", str(st.get("placeholder", "Enter password"))).strip()
+        self._text(cr, placeholder or "Enter password", cx, iy + ih / 2.0,
+                   max(6.0, min(11.0, 14.0 * s)), (1, 1, 1, 0.55))
+
+    def _hypr_clock(self):
+        st = self.state
+        if st.get("clock_24h", True):
+            fmt = "%H:%M"
+        else:
+            fmt = "%-I:%M"
+        if st.get("clock_seconds", False):
+            fmt += ":%S"
+        if not st.get("clock_24h", True):
+            fmt += " %p"
+        return time.strftime(fmt)
+
+    def _hypr_date(self):
+        try:
+            return time.strftime(str(self.state.get("date_format", "%A, %d %B")))
+        except ValueError:
+            return time.strftime("%A, %d %B")
+
+    @staticmethod
+    def _qt_clock(fmt):
+        tokens = re.findall(r"HH|hh|H|h|mm|ss|AP|ap|.", str(fmt or "h:mm"))
+        mapping = {
+            "HH": "%H", "hh": "%I", "H": "%-H", "h": "%-I",
+            "mm": "%M", "ss": "%S", "AP": "%p", "ap": "%p",
+        }
+        try:
+            return time.strftime("".join(mapping.get(token, token) for token in tokens))
+        except ValueError:
+            return time.strftime("%-I:%M")
+
+    @staticmethod
+    def _qt_date(fmt):
+        tokens = re.findall(r"dddd|ddd|dd|d|MMMM|MMM|MM|M|yyyy|yy|y|.", str(fmt or "ddd MMM d"))
+        mapping = {
+            "dddd": "%A", "ddd": "%a", "dd": "%d", "d": "%-d",
+            "MMMM": "%B", "MMM": "%b", "MM": "%m", "M": "%-m",
+            "yyyy": "%Y", "yy": "%y", "y": "%Y",
+        }
+        try:
+            return time.strftime("".join(mapping.get(token, token) for token in tokens))
+        except ValueError:
+            return time.strftime("%a %b %-d")
+
+
 class LookPage(Page):
     SLIDERS = [
         ("Blur size", "decoration:blur:size", 1, 20),
@@ -252,6 +609,8 @@ class WallpaperPage(Page):
         self.thumbs = {}
         self.buttons = {}
         self.cur = ""
+        self.video_queue = queue.Queue()
+        threading.Thread(target=self._video_worker, daemon=True).start()
         self.box.append(sec("Wallpaper"))
         self.flow = Gtk.FlowBox()
         self.flow.set_selection_mode(Gtk.SelectionMode.NONE)
@@ -302,17 +661,28 @@ class WallpaperPage(Page):
         for path, is_video in walls:
             btn = Gtk.Button()
             btn.add_css_class("thumbbtn")
+            btn.set_tooltip_text(os.path.basename(path))
             if is_video:
-                inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-                inner.set_size_request(172, 97)
-                inner.add_css_class("thumb")
-                inner.set_overflow(Gtk.Overflow.HIDDEN)
-                inner.append(label("󰕧", "big", xalign=0.5, hexpand=True))
-                inner.append(label(os.path.basename(path)[:22], "dimtext", xalign=0.5))
-                btn.set_child(inner)
+                holder = Gtk.Overlay()
+                holder.set_size_request(self.TW, self.TH)
+                holder.set_overflow(Gtk.Overflow.HIDDEN)
+                holder.add_css_class("thumb")
+                holder.add_css_class("thumbbox")
+                pic = Gtk.Picture()
+                pic.set_content_fit(Gtk.ContentFit.COVER)
+                pic.set_hexpand(True)
+                pic.set_vexpand(True)
+                holder.set_child(pic)
+                badge = Gtk.Label(label="󰕧")
+                badge.add_css_class("videobadge")
+                badge.set_halign(Gtk.Align.CENTER)
+                badge.set_valign(Gtk.Align.CENTER)
+                holder.add_overlay(badge)
+                btn.set_child(holder)
+                self.video_queue.put((path, pic))
             else:
                 pic = Gtk.Picture()
-                pic.set_size_request(172, 97)
+                pic.set_size_request(self.TW, self.TH)
                 pic.set_content_fit(Gtk.ContentFit.COVER)
                 pic.add_css_class("thumb")
                 pic.set_overflow(Gtk.Overflow.HIDDEN)
@@ -321,6 +691,56 @@ class WallpaperPage(Page):
             btn.connect("clicked", lambda _b, p=path: self.apply_wall(p))
             self.flow.append(btn)
             self.buttons[path] = btn
+
+    def _video_worker(self):
+        while True:
+            path, pic = self.video_queue.get()
+            try:
+                thumb = self.video_thumb(path)
+                pix = self.load_thumb(thumb) if thumb else None
+            except Exception:
+                pix = None
+            GLib.idle_add(self._video_done, pic, pix)
+
+    @staticmethod
+    def _video_done(pic, pix):
+        if pix is not None:
+            pic.set_paintable(Gdk.Texture.new_for_pixbuf(pix))
+        return False
+
+    @staticmethod
+    def video_thumb(path):
+        if not shutil.which("ffmpeg"):
+            return ""
+        try:
+            stat = os.stat(path)
+            key = f"{path}|{stat.st_mtime_ns}|{stat.st_size}"
+        except OSError:
+            key = path
+        digest = hashlib.sha256(key.encode("utf-8", "surrogateescape")).hexdigest()[:24]
+        outdir = os.path.join(HOME, ".cache", "glass", "video-thumbs")
+        out = os.path.join(outdir, digest + ".jpg")
+        if os.path.isfile(out) and os.path.getsize(out) > 0:
+            return out
+        os.makedirs(outdir, exist_ok=True)
+        tmp = out + ".tmp.jpg"
+        vf = "scale=480:270:force_original_aspect_ratio=increase,crop=480:270"
+        for seek in ("1", "0"):
+            rc, _text = run_rc(
+                "ffmpeg", "-y", "-ss", seek, "-i", path, "-frames:v", "1",
+                "-vf", vf, "-q:v", "3", tmp, timeout=25,
+            )
+            if rc == 0 and os.path.isfile(tmp) and os.path.getsize(tmp) > 0:
+                try:
+                    os.replace(tmp, out)
+                    return out
+                except OSError:
+                    pass
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return ""
 
     TW, TH = 172, 97
 
@@ -401,18 +821,12 @@ class LockPage(Page):
         self.timer = None
         self.syncing = False
         self.chooser = None
-        self.preview_token = 0
         self.rows = []
         self.switches = {}
         self.date_btns = {}
 
         self.box.append(sec("Lock screen wallpaper"))
-        self.preview = Gtk.Picture()
-        self.preview.set_size_request(256, 144)
-        self.preview.set_content_fit(Gtk.ContentFit.COVER)
-        self.preview.add_css_class("thumb")
-        self.preview.set_overflow(Gtk.Overflow.HIDDEN)
-        self.preview.set_halign(Gtk.Align.START)
+        self.preview = LockPreview("hyprlock")
         self.box.append(self.preview)
         self.wall_label = label("", "dimtext")
         self.box.append(self.wall_label)
@@ -512,7 +926,7 @@ class LockPage(Page):
             sw.set_active(bool(st.get(key, L.LOCK_DEFAULTS.get(key))))
         self.placeholder.set_text(str(st.get("placeholder", "")))
         self.mark_date(st.get("date_format", L.LOCK_DEFAULTS["date_format"]))
-        self.show_wall(str(st.get("wallpaper", "screenshot")))
+        self.refresh_preview(st)
         self.syncing = False
 
     def flip(self, key, state):
@@ -538,6 +952,7 @@ class LockPage(Page):
         st = L.load_lock_settings()
         st[key] = value
         L.save_lock_settings(st)
+        self.refresh_preview(st)
         if self.timer:
             GLib.source_remove(self.timer)
         self.timer = GLib.timeout_add(400, self.apply)
@@ -561,32 +976,19 @@ class LockPage(Page):
         self.on_show()
         self.apply()
 
-    def show_wall(self, path):
-        self.preview_token += 1
-        token = self.preview_token
-        self.preview.set_paintable(None)
+    def refresh_preview(self, st):
+        path = str(st.get("wallpaper", "screenshot"))
         if path == "screenshot":
             src = L.current_wallpaper()
             if src and src.lower().endswith(L.VID):
                 self.wall_label.set_text("Blurred desktop (from the current video wallpaper)")
-                return
-            self.wall_label.set_text("Blurred desktop")
-            if src:
-                self.load_preview(src, token)
-            return
-        self.wall_label.set_text(os.path.basename(path) or path)
-        self.load_preview(path, token)
-
-    def load_preview(self, path, token):
-        def work():
-            return WallpaperPage.load_thumb(path, 256, 144)
-
-        def done(pix):
-            if token != self.preview_token or pix is None:
-                return
-            self.preview.set_paintable(Gdk.Texture.new_for_pixbuf(pix))
-
-        bg(work, done)
+            elif src:
+                self.wall_label.set_text("Blurred desktop")
+            else:
+                self.wall_label.set_text("No desktop wallpaper found")
+        else:
+            self.wall_label.set_text(os.path.basename(path) or path)
+        self.preview.set_state(st)
 
     def use_blurred(self):
         self.set_wallpaper("screenshot")
@@ -650,7 +1052,6 @@ class LockPage(Page):
 
     def set_wallpaper(self, path):
         self.queue("wallpaper", path)
-        self.show_wall(path)
 
 
 class LoginPage(Page):
@@ -666,11 +1067,11 @@ class LoginPage(Page):
         self.pending = {}
         self.syncing = False
         self.chooser = None
-        self.preview_token = 0
         self.rows = []
         self.date_btns = {}
         self.clock_key = ""
         self.date_key = ""
+        self.preview_state = {}
 
         st = L.read_sddm_settings()
         self.ready = bool(st.get("theme"))
@@ -690,12 +1091,7 @@ class LoginPage(Page):
 
         self.theme_label.set_text(f"Theme: {st.get('theme', '')}")
         self.box.append(sec("Login screen wallpaper"))
-        self.preview = Gtk.Picture()
-        self.preview.set_size_request(256, 144)
-        self.preview.set_content_fit(Gtk.ContentFit.COVER)
-        self.preview.add_css_class("thumb")
-        self.preview.set_overflow(Gtk.Overflow.HIDDEN)
-        self.preview.set_halign(Gtk.Align.START)
+        self.preview = LockPreview("sddm")
         self.box.append(self.preview)
         self.wall_label = label("", "dimtext")
         self.box.append(self.wall_label)
@@ -773,7 +1169,8 @@ class LoginPage(Page):
             self.clock24.set_active(bool(st.get("clock_24h")))
             self.clock_seconds.set_active(bool(st.get("clock_seconds")))
         self.mark_date(st.get("date_format", ""))
-        self.show_wall(st.get("wallpaper", ""), st.get("wallpaper_kind", "image"))
+        self.preview_state = dict(st)
+        self.refresh_preview(st)
         self.syncing = False
 
     def clock_changed(self):
@@ -798,6 +1195,21 @@ class LoginPage(Page):
         if self.syncing:
             return
         self.pending[key] = value
+
+        st = dict(self.preview_state)
+        if key == self.clock_key:
+            st["clock_format"] = value
+            st["clock_24h"] = "H" in str(value)
+            st["clock_seconds"] = "s" in str(value)
+        elif key == self.date_key:
+            st["date_format"] = value
+        elif key == st.get("blur_key"):
+            st["blur"] = value
+        elif key == st.get("dim_key"):
+            st["dim"] = value
+        self.preview_state = st
+        self.refresh_preview(st)
+
         if self.timer:
             GLib.source_remove(self.timer)
         self.timer = GLib.timeout_add(400, self.apply)
@@ -816,43 +1228,15 @@ class LoginPage(Page):
         self.say("Saved — changes appear on the next login screen.")
         return False
 
-    def show_wall(self, path, kind):
-        self.preview_token += 1
-        token = self.preview_token
-        self.preview.set_paintable(None)
+    def refresh_preview(self, st):
+        path = str(st.get("wallpaper", ""))
         if not path or not os.path.isfile(path):
             self.wall_label.set_text("Theme background")
-            return
-        name = os.path.basename(path) or path
-        if kind == "video":
-            self.wall_label.set_text(f"{name} (video)")
-            out = os.path.join(HOME, ".cache", "glass", "login-preview.png")
-
-            def work():
-                os.makedirs(os.path.dirname(out), exist_ok=True)
-                rc, _t = run_rc("ffmpeg", "-y", "-ss", "0.5", "-i", path,
-                                "-frames:v", "1", out, timeout=30)
-                return out if rc == 0 and os.path.isfile(out) else ""
-
-            def done(frame):
-                if token == self.preview_token and frame:
-                    self.load_preview(frame, token)
-
-            bg(work, done)
-            return
-        self.wall_label.set_text(name)
-        self.load_preview(path, token)
-
-    def load_preview(self, path, token):
-        def work():
-            return WallpaperPage.load_thumb(path, 256, 144)
-
-        def done(pix):
-            if token != self.preview_token or pix is None:
-                return
-            self.preview.set_paintable(Gdk.Texture.new_for_pixbuf(pix))
-
-        bg(work, done)
+        else:
+            name = os.path.basename(path) or path
+            suffix = " (video)" if st.get("wallpaper_kind") == "video" else ""
+            self.wall_label.set_text(f"{name}{suffix}")
+        self.preview.set_state(st)
 
     def use_desktop(self):
         path = L.current_wallpaper()
