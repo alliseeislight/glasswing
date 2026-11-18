@@ -154,6 +154,9 @@ progressbar progress {
 }
 progressbar.charging progress { background-image: linear-gradient(180deg, #5be37d, #34c759); }
 progressbar.low progress { background-image: linear-gradient(180deg, #ff8a80, #ff5f57); }
+.statgraph { border-radius: 14px; background-color: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.10); }
+progressbar.statbar trough, progressbar.statbar progress { min-height: 10px; border-radius: 10px; }
+progressbar.statbar.storage progress { background-image: linear-gradient(180deg, #b6ead2, #9fd8c0); }
 label.wk { color: rgba(255,255,255,0.50); font-size: 12px; font-weight: bold; min-width: 38px; }
 label.day { color: white; font-size: 15px; min-width: 38px; min-height: 38px; border-radius: 38px; }
 label.day.dim { color: rgba(255,255,255,0.28); }

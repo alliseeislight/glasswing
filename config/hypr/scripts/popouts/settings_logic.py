@@ -8,6 +8,7 @@ import re
 import shutil
 import time
 
+HOME = os.path.expanduser("~")
 CFG_DIR = os.path.expanduser("~/.config/glass")
 SETTINGS = os.path.join(CFG_DIR, "settings.json")
 LOCK_SETTINGS = os.path.join(CFG_DIR, "lock.json")
@@ -790,6 +791,113 @@ def set_sddm_default_wallpaper():
 
 
 # ---------------- misc ----------------
+def human_size(n):
+    """Return a compact byte size, e.g. 15.6 GiB."""
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return "0 B"
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB", "PiB"):
+        if abs(n) < 1024.0 or unit == "PiB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024.0
+    return f"{n:.1f} PiB"
+
+
+def human_duration(seconds):
+    """Return a compact uptime, e.g. 3d 7h."""
+    try:
+        seconds = max(0, int(float(seconds)))
+    except (TypeError, ValueError):
+        return "0m"
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def _meminfo():
+    info = {}
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                key, _, rest = line.partition(":")
+                parts = rest.split()
+                if parts and parts[0].isdigit():
+                    info[key] = int(parts[0]) * 1024  # kB -> bytes
+    except OSError:
+        pass
+    return info
+
+
+def _thermal_c():
+    temps = []
+    try:
+        import glob
+        for path in glob.glob("/sys/class/thermal/thermal_zone*/temp"):
+            value = read(path)
+            if value.lstrip("-").isdigit():
+                c = int(value) / 1000.0
+                if 0 < c < 110:
+                    temps.append(c)
+    except Exception:
+        pass
+    return max(temps) if temps else None
+
+
+def system_snapshot():
+    """Live RAM, swap, storage, and related system numbers."""
+    mem = _meminfo()
+    total = mem.get("MemTotal", 0)
+    available = mem.get("MemAvailable") or mem.get("MemFree", 0)
+    used = max(0, total - available)
+    swap_total = mem.get("SwapTotal", 0)
+    swap_free = mem.get("SwapFree", swap_total)
+    swap_used = max(0, swap_total - swap_free)
+
+    try:
+        disk = shutil.disk_usage(HOME)
+    except OSError:
+        disk = shutil.disk_usage("/")
+    try:
+        uptime = float(read("/proc/uptime").split()[0])
+    except (ValueError, IndexError):
+        uptime = 0.0
+    try:
+        load = os.getloadavg()[0]
+    except OSError:
+        load = 0.0
+    try:
+        processes = sum(name.isdigit() for name in os.listdir("/proc"))
+    except OSError:
+        processes = 0
+
+    return {
+        "ram": {
+            "used": used, "total": total, "available": available,
+            "fraction": used / total if total else 0.0,
+        },
+        "swap": {
+            "used": swap_used, "total": swap_total,
+            "fraction": swap_used / swap_total if swap_total else 0.0,
+        },
+        "disk": {
+            "path": HOME, "used": disk.used, "total": disk.total,
+            "free": disk.free,
+            "fraction": disk.used / disk.total if disk.total else 0.0,
+        },
+        "load": load,
+        "cores": os.cpu_count() or 1,
+        "uptime": uptime,
+        "processes": processes,
+        "temp": _thermal_c(),
+    }
+
+
 def monitors_summary(data):
     out = []
     for m in data if isinstance(data, list) else []:

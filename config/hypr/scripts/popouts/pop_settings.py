@@ -9,6 +9,7 @@ import subprocess
 import threading
 import time
 
+import cairo
 import gi
 
 gi.require_version("GdkPixbuf", "2.0")
@@ -490,6 +491,107 @@ class LockPreview(Gtk.Overlay):
             return time.strftime("".join(mapping.get(token, token) for token in tokens))
         except ValueError:
             return time.strftime("%a %b %-d")
+
+
+class StatGraph(Gtk.Box):
+    """Compact usage sparkline with a percentage, detail line, and current-use bar."""
+
+    HISTORY = 48
+
+    def __init__(self, title, color, storage=False):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.color = tuple(max(0, min(1, c / 255.0)) for c in color)
+        self.history = []
+
+        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        head.append(label(title.upper(), "sec", hexpand=True))
+        self.pct = label("—", "big")
+        head.append(self.pct)
+        self.append(head)
+
+        self.graph = Gtk.DrawingArea()
+        self.graph.set_size_request(-1, 88)
+        self.graph.set_hexpand(True)
+        self.graph.add_css_class("statgraph")
+        self.graph.set_draw_func(self.draw)
+        self.append(self.graph)
+
+        self.bar = Gtk.ProgressBar()
+        self.bar.add_css_class("statbar")
+        if storage:
+            self.bar.add_css_class("storage")
+        self.append(self.bar)
+
+        self.detail = label("", "dimtext")
+        self.detail.set_wrap(True)
+        self.append(self.detail)
+
+    def update(self, fraction, detail):
+        fraction = max(0.0, min(1.0, float(fraction)))
+        if not self.history:
+            self.history = [fraction] * self.HISTORY
+        else:
+            self.history.append(fraction)
+            self.history = self.history[-self.HISTORY:]
+        self.pct.set_text(f"{fraction * 100:.0f}%")
+        self.bar.set_fraction(fraction)
+        self.detail.set_text(detail)
+        self.graph.queue_draw()
+
+    @staticmethod
+    def _point(value, pad, width, height):
+        x = pad + value * (width - 2 * pad)
+        y = height - pad - value * (height - 2 * pad)
+        return x, y
+
+    def draw(self, _area, cr, width, height):
+        if width <= 8 or height <= 8 or not self.history:
+            return
+        pad = 8
+        r, g, b = self.color
+
+        cr.set_source_rgba(1, 1, 1, 0.035)
+        cr.rectangle(0, 0, width, height)
+        cr.fill()
+        for level in (0.25, 0.5, 0.75):
+            _x, y = self._point(level, pad, width, height)
+            cr.set_source_rgba(1, 1, 1, 0.07)
+            cr.move_to(pad, y)
+            cr.line_to(width - pad, y)
+            cr.stroke()
+
+        count = len(self.history)
+        points = []
+        for i, value in enumerate(self.history):
+            x = pad + (i / max(1, count - 1)) * (width - 2 * pad)
+            points.append((x, height - pad - value * (height - 2 * pad)))
+
+        cr.move_to(points[0][0], height - pad)
+        for x, y in points:
+            cr.line_to(x, y)
+        cr.line_to(points[-1][0], height - pad)
+        cr.close_path()
+        fill = cairo.LinearGradient(0, pad, 0, height - pad)
+        fill.add_color_stop_rgba(0, r, g, b, 0.38)
+        fill.add_color_stop_rgba(1, r, g, b, 0.02)
+        cr.set_source(fill)
+        cr.fill()
+
+        cr.move_to(*points[0])
+        for point in points[1:]:
+            cr.line_to(*point)
+        cr.set_source_rgba(r, g, b, 0.95)
+        cr.set_line_width(2.0)
+        cr.stroke()
+
+        x, y = points[-1]
+        cr.arc(x, y, 3.5, 0, 2 * math.pi)
+        cr.set_source_rgba(1, 1, 1, 0.95)
+        cr.fill()
+        cr.arc(x, y, 3.5, 0, 2 * math.pi)
+        cr.set_source_rgba(r, g, b, 1.0)
+        cr.set_line_width(1.5)
+        cr.stroke()
 
 
 class LookPage(Page):
@@ -1693,6 +1795,103 @@ class ShellPage(Page):
         return False
 
 
+class SystemPage(Page):
+    INTERVAL = 2
+
+    def build(self):
+        self.timer = None
+        self.busy = False
+        try:
+            ram_color = accent.compute()
+        except Exception:
+            ram_color = (168, 184, 230)
+
+        self.box.append(sec("Memory"))
+        self.ram = StatGraph("RAM", ram_color)
+        self.box.append(self.ram)
+        self.swap = label("", "dimtext")
+        self.box.append(self.swap)
+
+        self.box.append(Gtk.Separator())
+        self.box.append(sec("Storage"))
+        home_name = os.path.basename(L.HOME) or L.HOME
+        self.disk = StatGraph(f"Disk · {home_name}", (159, 216, 192), storage=True)
+        self.box.append(self.disk)
+        self.disk_extra = label("", "dimtext")
+        self.box.append(self.disk_extra)
+
+        self.box.append(Gtk.Separator())
+        self.box.append(sec("At a glance"))
+        self.glance = label("", "dimtext")
+        self.glance.set_wrap(True)
+        self.box.append(self.glance)
+
+        refresh = Gtk.Button(label="Refresh now")
+        refresh.add_css_class("chip")
+        refresh.set_halign(Gtk.Align.START)
+        refresh.connect("clicked", lambda _b: self.refresh())
+        self.box.append(refresh)
+
+    def on_show(self):
+        self.refresh()
+        if self.timer is None:
+            self.timer = GLib.timeout_add_seconds(self.INTERVAL, self.tick)
+
+    def tick(self):
+        if not self.owner.visible():
+            self.timer = None
+            return False
+        self.refresh()
+        return True
+
+    def refresh(self):
+        if self.busy:
+            return
+        self.busy = True
+
+        def work():
+            try:
+                return L.system_snapshot()
+            except Exception:
+                return None
+
+        bg(work, self.apply)
+
+    def apply(self, snap):
+        self.busy = False
+        if not snap:
+            self.say("Couldn't read system stats")
+            return
+
+        ram = snap["ram"]
+        swap = snap["swap"]
+        disk = snap["disk"]
+        self.ram.update(
+            ram["fraction"],
+            f"{L.human_size(ram['used'])} of {L.human_size(ram['total'])} used · "
+            f"{L.human_size(ram['available'])} available",
+        )
+        if swap["total"]:
+            self.swap.set_text(
+                f"Swap: {L.human_size(swap['used'])} of {L.human_size(swap['total'])} used"
+            )
+        else:
+            self.swap.set_text("Swap: disabled")
+        self.disk.update(
+            disk["fraction"],
+            f"{L.human_size(disk['used'])} of {L.human_size(disk['total'])} used · "
+            f"{L.human_size(disk['free'])} free",
+        )
+        self.disk_extra.set_text(f"Mount: {disk['path']}")
+
+        temp = f" · {snap['temp']:.0f}°C" if snap.get("temp") else ""
+        self.glance.set_text(
+            f"Load {snap['load']:.2f} / {snap['cores']} cores · "
+            f"Uptime {L.human_duration(snap['uptime'])} · "
+            f"{snap['processes']} processes{temp}"
+        )
+
+
 class SettingsPopup(Popup):
     name = "settings"
     width = 820
@@ -1705,6 +1904,7 @@ class SettingsPopup(Popup):
         ("󰸉", "Wallpaper & theme", WallpaperPage),
         ("󰍂", "Login screen", LoginPage),
         ("󰌾", "Screen lock", LockPage),
+        ("󰈺", "System", SystemPage),
         ("󰖩", "Quick links", LinksPage),
         ("󰌌", "Keybinds", KeybindsPage),
         ("󰐥", "Startup", StartupPage),
