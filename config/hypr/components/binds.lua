@@ -50,7 +50,7 @@ hl.bind(M .. " + N", hl.dsp.exec_cmd("swaync-client -t -sw"))
 hl.bind(M .. " + Print", hl.dsp.exec_cmd('grim -g "$(slurp)" - | satty --filename -'))
 
 hl.bind("XF86PowerOff", hl.dsp.exec_cmd("wlogout -b 3 -T 300 -B 300"))
-hl.bind("XF86ScreenSaver", hl.dsp.exec_cmd("hyprlock"))
+hl.bind("XF86ScreenSaver", hl.dsp.exec_cmd("glass-lock"))
 
 hl.bind("code:238", hl.dsp.exec_cmd("brightnessctl -d smc::kbd_backlight s +10"))
 hl.bind("code:237", hl.dsp.exec_cmd("brightnessctl -d smc::kbd_backlight s 10-"))

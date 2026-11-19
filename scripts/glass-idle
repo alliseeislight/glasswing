@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Don't start hypridle when Glasswing's Always On switch is enabled.
+settings="$HOME/.config/glass/settings.json"
+if [ -f "$settings" ] && grep -Eq '"settings_always_on"[[:space:]]*:[[:space:]]*true' "$settings"; then
+	exit 0
+fi
+exec hypridle "$@"

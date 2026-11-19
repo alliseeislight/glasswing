@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Respect Glasswing's Always On switch: skip manual lock while it is enabled.
+settings="$HOME/.config/glass/settings.json"
+if [ -f "$settings" ] && grep -Eq '"settings_always_on"[[:space:]]*:[[:space:]]*true' "$settings"; then
+	exit 0
+fi
+exec hyprlock "$@"

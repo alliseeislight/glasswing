@@ -346,7 +346,7 @@ write_file "$HOME/.local/bin/glass-files" 755 <<'EOF'
 # Glasswing launcher: always use the system Python that owns PyGObject.
 exec /usr/bin/python3 "$HOME/.local/share/glasswing/glass-files/run.py" "$@"
 EOF
-for f in bar-start glass-files-open shot-full shot-region rec-toggle; do
+for f in bar-start glass-files-open glass-idle glass-lock shot-full shot-region rec-toggle; do
 	install_file "$ROOT/scripts/$f" "$HOME/.local/bin/$f" 755
 done
 

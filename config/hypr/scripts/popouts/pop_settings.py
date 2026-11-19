@@ -1781,7 +1781,7 @@ class SystemPage(Page):
         row.append(self.always)
         self.box.append(row)
         self.always_hint = label(
-            "Keep Settings open when you click away or open another popout.", "dimtext")
+            "Keeps Settings open and blocks the lock screen while enabled.", "dimtext")
         self.always_hint.set_wrap(True)
         self.box.append(self.always_hint)
 
@@ -1824,8 +1824,8 @@ class SystemPage(Page):
             if setter:
                 setter(on)
             self.always_hint.set_text(
-                "Settings stays open until you close it." if on
-                else "Keep Settings open when you click away or open another popout.")
+                "Settings stays open; automatic and manual locking are blocked." if on
+                else "Keeps Settings open and blocks the lock screen while enabled.")
             self.say("Always on" if on else "Always on off")
         except Exception as e:
             self.say(str(e))
@@ -2027,10 +2027,19 @@ class SettingsPopup(Popup):
             self.always_on = bool(L.load_settings().get("settings_always_on", False))
         except Exception:
             self.always_on = False
+        self.apply_lock_state(self.always_on)
         super().__init__(app)
+
+    @staticmethod
+    def apply_lock_state(on):
+        if on:
+            fire("pkill", "-x", "hypridle")
+        else:
+            fire("sh", "-c", "pgrep -x hypridle >/dev/null || setsid -f hypridle")
 
     def set_always_on(self, on):
         self.always_on = bool(on)
+        self.apply_lock_state(self.always_on)
 
     def toggle(self, x):
         if self.always_on and self.visible():
