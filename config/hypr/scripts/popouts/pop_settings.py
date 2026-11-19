@@ -1854,6 +1854,125 @@ class SystemPage(Page):
         )
 
 
+class LauncherPage(Page):
+    def build(self):
+        self.apps = []
+        self.hidden = set()
+        self.busy = False
+        self.syncing = False
+
+        self.box.append(sec("Launcher apps"))
+        note = label("Turn an app off to hide it from the launcher (Super + D).", "dimtext")
+        note.set_wrap(True)
+        self.box.append(note)
+
+        self.search = Gtk.Entry()
+        self.search.set_placeholder_text("Search apps")
+        self.search.connect("changed", lambda _e: self.render())
+        self.box.append(self.search)
+
+        self.summary = label("", "dimtext")
+        self.box.append(self.summary)
+        self.list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.box.append(self.list)
+
+    def on_show(self):
+        self.refresh()
+
+    def refresh(self):
+        if self.busy:
+            return
+        self.busy = True
+
+        def work():
+            try:
+                hidden = L.hidden_app_ids()
+                return L.launcher_apps(hidden), hidden
+            except Exception:
+                return [], set()
+
+        bg(work, self.loaded)
+
+    def loaded(self, data):
+        self.busy = False
+        self.apps, self.hidden = data
+        self.render()
+
+    @staticmethod
+    def app_image(icon_name):
+        if icon_name and os.path.isabs(icon_name) and os.path.isfile(icon_name):
+            icon = Gio.FileIcon.new(Gio.File.new_for_path(icon_name))
+            return Gtk.Image.new_from_gicon(icon)
+        return Gtk.Image.new_from_icon_name(icon_name or "application-x-executable")
+
+    def render(self):
+        clear(self.list)
+        query = self.search.get_text().strip().lower()
+        shown = [app for app in self.apps if query in app["name"].lower()]
+        total = len(self.apps)
+        self.summary.set_text(f"{total - len(self.hidden)} shown · {len(self.hidden)} hidden")
+
+        if not shown:
+            self.list.append(label("No apps match that search", "dimtext"))
+            return
+
+        for app in shown:
+            app_id = app["id"]
+            visible = app_id not in self.hidden
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            img = self.app_image(app["icon"])
+            img.set_size_request(24, 24)
+            row.append(img)
+
+            name = label(app["name"], "plain", hexpand=True)
+            name.set_ellipsize(Pango.EllipsizeMode.END)
+            self._dim(name, not visible)
+            row.append(name)
+
+            if app["comment"]:
+                comment = label(app["comment"], "dimtext")
+                comment.set_ellipsize(Pango.EllipsizeMode.END)
+                comment.set_max_width_chars(24)
+                row.append(comment)
+
+            sw = Gtk.Switch()
+            sw.set_valign(Gtk.Align.CENTER)
+            self.syncing = True
+            sw.set_active(visible)
+            self.syncing = False
+            sw.connect("state-set",
+                       lambda _s, state, i=app_id, s=sw, n=name: self.toggle(i, state, s, n))
+            row.append(sw)
+            self.list.append(row)
+
+    @staticmethod
+    def _dim(name, hidden):
+        (name.add_css_class if hidden else name.remove_css_class)("dimtext")
+
+    def toggle(self, app_id, visible, switch, name):
+        if self.syncing:
+            return False
+        try:
+            if visible:
+                L.unhide_app(app_id)
+                self.say(f"Showing {name.get_text()}")
+            else:
+                L.hide_app(app_id)
+                self.say(f"Hidden {name.get_text()} from the launcher")
+        except Exception as e:
+            self.syncing = True
+            switch.set_active(not visible)
+            self.syncing = False
+            self.say(str(e))
+            return False
+
+        self.hidden = L.hidden_app_ids()
+        self._dim(name, not visible)
+        self.summary.set_text(f"{len(self.apps) - len(self.hidden)} shown · {len(self.hidden)} hidden")
+        bg(lambda: run("update-desktop-database", L.USER_APPLICATIONS, timeout=15))
+        return False
+
+
 class SettingsPopup(Popup):
     name = "settings"
     width = 820
@@ -1867,6 +1986,7 @@ class SettingsPopup(Popup):
         ("󰍂", "Login screen", LoginPage),
         ("󰌾", "Screen lock", LockPage),
         ("󰈺", "System", SystemPage),
+        ("󰍉", "Launcher", LauncherPage),
         ("󰖩", "Quick links", LinksPage),
         ("󰌌", "Keybinds", KeybindsPage),
         ("󰐥", "Startup", StartupPage),

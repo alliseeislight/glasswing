@@ -12,6 +12,9 @@ HOME = os.path.expanduser("~")
 CFG_DIR = os.path.expanduser("~/.config/glass")
 SETTINGS = os.path.join(CFG_DIR, "settings.json")
 LOCK_SETTINGS = os.path.join(CFG_DIR, "lock.json")
+HIDDEN_APPS = os.path.join(CFG_DIR, "hidden_apps.json")
+HIDDEN_APP_BACKUPS = os.path.join(CFG_DIR, "hidden-app-backups")
+USER_APPLICATIONS = os.path.join(HOME, ".local", "share", "applications")
 USER_LUA = os.path.join(CFG_DIR, "hypr-user.lua")
 HYPR = os.path.expanduser("~/.config/hypr")
 LOCK_CONF = os.path.join(HYPR, "hyprlock.conf")
@@ -791,6 +794,173 @@ def set_sddm_default_wallpaper():
 
 
 # ---------------- misc ----------------
+# ---------------- launcher app visibility ----------------
+def _data_dirs():
+    home = os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local", "share")
+    system = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"
+    dirs = [home]
+    for path in system.split(":"):
+        if path and path not in dirs:
+            dirs.append(path)
+    return dirs
+
+
+def find_desktop_file(desktop_id):
+    for base in _data_dirs():
+        path = os.path.join(base, "applications", desktop_id)
+        if os.path.isfile(path):
+            return path
+    return ""
+
+
+def load_hidden_apps():
+    try:
+        data = json.loads(read(HIDDEN_APPS, "{}"))
+    except ValueError:
+        data = {}
+    apps = data.get("apps") if isinstance(data, dict) else None
+    return apps if isinstance(apps, dict) else {}
+
+
+def save_hidden_apps(apps):
+    write_atomic(HIDDEN_APPS, json.dumps({"apps": apps}, indent=2) + "\n")
+    return apps
+
+
+def hidden_app_ids():
+    return set(load_hidden_apps())
+
+
+def _desktop_entry(path):
+    parser = configparser.ConfigParser(strict=False, interpolation=None)
+    parser.optionxform = str.lower
+    try:
+        parser.read(path, encoding="utf-8")
+        return parser["Desktop Entry"]
+    except Exception:
+        return {}
+
+
+def launcher_apps(include_hidden=None):
+    """List XDG apps that a launcher would normally show, plus any we hid."""
+    include_hidden = set(include_hidden or [])
+    seen = {}
+    for base in _data_dirs():
+        appdir = os.path.join(base, "applications")
+        if not os.path.isdir(appdir):
+            continue
+        for path in sorted(glob.glob(os.path.join(appdir, "*.desktop"))):
+            desktop_id = os.path.basename(path)
+            if desktop_id in seen:
+                continue
+            entry = _desktop_entry(path)
+            if not entry or entry.get("Type", "Application").strip() != "Application":
+                continue
+            hidden = (entry.get("Hidden", "false").strip().lower() == "true"
+                      or entry.get("NoDisplay", "false").strip().lower() == "true")
+            if hidden and desktop_id not in include_hidden:
+                continue
+            name = (entry.get("Name") or desktop_id).strip() or desktop_id
+            seen[desktop_id] = {
+                "id": desktop_id,
+                "name": name,
+                "icon": (entry.get("Icon") or "").strip(),
+                "comment": (entry.get("Comment") or "").strip(),
+                "path": path,
+            }
+    return sorted(seen.values(), key=lambda app: app["name"].lower())
+
+
+def _set_desktop_keys(text, values):
+    """Set keys inside [Desktop Entry] without rewriting the rest of the file."""
+    wanted = {key.lower(): value for key, value in values.items()}
+    lines = (text or "").splitlines()
+    out = []
+    group = ""
+    inserted = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            if group.lower() == "desktop entry" and not inserted:
+                out += [f"{key}={value}" for key, value in values.items()]
+                inserted = True
+            group = stripped[1:-1].strip()
+            out.append(line)
+            continue
+        if group.lower() == "desktop entry" and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip().lower()
+            if key in wanted:
+                out.append(f"{key}={wanted[key]}")
+                continue
+        out.append(line)
+    if group.lower() == "desktop entry" and not inserted:
+        out += [f"{key}={value}" for key, value in values.items()]
+        inserted = True
+    if not inserted:
+        out = ["[Desktop Entry]"] + [f"{key}={value}" for key, value in values.items()] + [""] + out
+    return "\n".join(out).rstrip() + "\n"
+
+
+def hide_app(desktop_id):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+\.desktop", desktop_id or ""):
+        raise ValueError("Invalid application id")
+    apps = load_hidden_apps()
+    if desktop_id in apps:
+        return True
+
+    source = find_desktop_file(desktop_id)
+    if not source:
+        raise ValueError("That desktop entry could not be found")
+
+    target = os.path.join(USER_APPLICATIONS, desktop_id)
+    existed = os.path.isfile(target)
+    original = read(target) if existed else read(source)
+    if not original.strip():
+        raise ValueError("That desktop entry is empty")
+
+    os.makedirs(USER_APPLICATIONS, exist_ok=True)
+    backup = ""
+    if existed:
+        os.makedirs(HIDDEN_APP_BACKUPS, exist_ok=True)
+        backup = os.path.join(HIDDEN_APP_BACKUPS, desktop_id + ".orig")
+        write_atomic(backup, original)
+    patched = _set_desktop_keys(original, {"Hidden": "true", "NoDisplay": "true"})
+    write_atomic(target, patched)
+    try:
+        os.chmod(target, 0o644)
+    except OSError:
+        pass
+
+    apps[desktop_id] = {"target": target, "existed": existed, "backup": backup}
+    save_hidden_apps(apps)
+    return True
+
+
+def unhide_app(desktop_id):
+    apps = load_hidden_apps()
+    meta = apps.pop(desktop_id, None)
+    if meta is None:
+        return True
+
+    target = str(meta.get("target") or os.path.join(USER_APPLICATIONS, desktop_id))
+    if meta.get("existed"):
+        backup = str(meta.get("backup") or "")
+        original = read(backup) if backup and os.path.isfile(backup) else ""
+        if original.strip():
+            write_atomic(target, original)
+        elif os.path.isfile(target):
+            restored = _set_desktop_keys(read(target), {"Hidden": "false", "NoDisplay": "false"})
+            write_atomic(target, restored)
+    elif os.path.isfile(target):
+        try:
+            os.remove(target)
+        except OSError:
+            pass
+
+    save_hidden_apps(apps)
+    return True
+
+
 def human_size(n):
     """Return a compact byte size, e.g. 15.6 GiB."""
     try:

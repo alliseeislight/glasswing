@@ -26,7 +26,7 @@ outline, and just enough colour to catch the light.
 | **Popouts** | GTK4 layer-shell panels for Wi-Fi, Bluetooth, volume, battery, calendar, clipboard, notes, and settings. |
 | **Glass Files** | A single-instance GTK4 file manager with tabs, split view, Quick Look, image rotation, batch rename, archive tools, trash, undo/redo, and `org.freedesktop.FileManager1`. |
 | **Wallpaper pipeline** | Waypaper + mpvpaper for images and video; Wallust recolours Kitty, Waybar, Rofi, SwayNC, Wlogout, Hyprland, and Cava. |
-| **Settings** | A glass settings popout with live lock-screen previews, video wallpaper thumbnails, RAM and storage pie charts, and controls for accent colour, top bar, dock, widgets, wallpaper, SDDM login screen, session lock screen, and app management. |
+| **Settings** | A glass settings popout with live lock-screen previews, video wallpaper thumbnails, RAM and storage pie charts, per-app launcher hiding, and controls for accent colour, top bar, dock, widgets, wallpaper, SDDM login screen, session lock screen, and app management. |
 | **Session pieces** | Hyprlock session lock screen with configurable wallpaper, blur, card, clock, and password field; Hypridle, cliphist clipboard history, screenshot/recording shortcuts, and a wlogout session menu. |
 
 ## Screenshots
@@ -110,7 +110,8 @@ systemd user service.
   live preview that updates as you change the settings. The **Wallpaper & theme**
   grid shows real thumbnails for video wallpapers too. The **System** page has
   live RAM and storage pie charts with swap, capacity, load, uptime, and process
-  counts alongside them.
+  counts alongside them. The **Launcher** page can hide individual apps from the
+  Rofi app grid with a switch; hidden apps stay hidden across reinstalls.
 
 The sample wallpaper is installed to `~/Pictures/wallpapers/glasswing.jpg`.
 Drop more images or videos into that folder; Waypaper and `Super + W` use it as
