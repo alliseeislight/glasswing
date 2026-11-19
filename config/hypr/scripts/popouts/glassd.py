@@ -101,7 +101,8 @@ class Daemon(Gtk.Application):
         if not pop:
             return
         for other in self.pops.values():
-            if other is not pop and other.visible():
+            if (other is not pop and other.visible()
+                    and not getattr(other, "always_on", False)):
                 other.hide()
         pop.toggle(x)
 

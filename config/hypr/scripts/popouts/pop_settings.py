@@ -1763,11 +1763,29 @@ class SystemPage(Page):
     def build(self):
         self.timer = None
         self.busy = False
+        self.syncing = False
         try:
             ram_color = accent.compute()
         except Exception:
             ram_color = (168, 184, 230)
 
+        self.box.append(sec("Settings window"))
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        row.append(label("Always on", "plain", hexpand=True))
+        self.always = Gtk.Switch()
+        self.always.set_valign(Gtk.Align.CENTER)
+        self.syncing = True
+        self.always.set_active(bool(getattr(self.owner, "always_on", False)))
+        self.syncing = False
+        self.always.connect("state-set", self.always_changed)
+        row.append(self.always)
+        self.box.append(row)
+        self.always_hint = label(
+            "Keep Settings open when you click away or open another popout.", "dimtext")
+        self.always_hint.set_wrap(True)
+        self.box.append(self.always_hint)
+
+        self.box.append(Gtk.Separator())
         self.box.append(sec("Memory"))
         self.ram = StatGraph("RAM", ram_color)
         self.box.append(self.ram)
@@ -1794,7 +1812,30 @@ class SystemPage(Page):
         refresh.connect("clicked", lambda _b: self.refresh())
         self.box.append(refresh)
 
+    def always_changed(self, _sw, state):
+        if self.syncing:
+            return False
+        on = bool(state)
+        try:
+            settings = L.load_settings()
+            settings["settings_always_on"] = on
+            L.save_settings(settings)
+            setter = getattr(self.owner, "set_always_on", None)
+            if setter:
+                setter(on)
+            self.always_hint.set_text(
+                "Settings stays open until you close it." if on
+                else "Keep Settings open when you click away or open another popout.")
+            self.say("Always on" if on else "Always on off")
+        except Exception as e:
+            self.say(str(e))
+            return False
+        return False
+
     def on_show(self):
+        self.syncing = True
+        self.always.set_active(bool(getattr(self.owner, "always_on", False)))
+        self.syncing = False
         self.refresh()
         if self.timer is None:
             self.timer = GLib.timeout_add_seconds(self.INTERVAL, self.tick)
@@ -1979,6 +2020,22 @@ class SettingsPopup(Popup):
     centered = True
     top = 70
     autohide = False
+    always_on = False
+
+    def __init__(self, app):
+        try:
+            self.always_on = bool(L.load_settings().get("settings_always_on", False))
+        except Exception:
+            self.always_on = False
+        super().__init__(app)
+
+    def set_always_on(self, on):
+        self.always_on = bool(on)
+
+    def toggle(self, x):
+        if self.always_on and self.visible():
+            return
+        super().toggle(x)
 
     PAGES = [
         ("󰔎", "Look & feel", LookPage),

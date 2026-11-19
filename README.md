@@ -110,8 +110,10 @@ systemd user service.
   live preview that updates as you change the settings. The **Wallpaper & theme**
   grid shows real thumbnails for video wallpapers too. The **System** page has
   live RAM and storage pie charts with swap, capacity, load, uptime, and process
-  counts alongside them. The **Launcher** page can hide individual apps from the
-  Rofi app grid with a switch; hidden apps stay hidden across reinstalls.
+  counts alongside them. Its **Always on** switch keeps the Settings popout open
+  when you click away or open another popout; the close button still closes it.
+  The **Launcher** page can hide individual apps from the Rofi app grid with a
+  switch; hidden apps stay hidden across reinstalls.
 
 The sample wallpaper is installed to `~/Pictures/wallpapers/glasswing.jpg`.
 Drop more images or videos into that folder; Waypaper and `Super + W` use it as
